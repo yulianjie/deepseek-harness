@@ -14,13 +14,16 @@ import type { PluginInstallFailureKind, Registry } from '@deepseek-ai/dsh-api-re
 import {
   Button, IconCheckCircleFillRegular, IconChevronDownOutlineRegular, IconChevronLeftOutlineMedium,
   IconChevronRightOutlineRegular, IconCloseOutlineMedium,
-  IconDownloadOutlineRegular, IconInfoOutlineRegular, IconPlusOutlineRegular, IconRefreshOutlineRegular, IconTrashOutlineRegular,
+  IconDownloadOutlineRegular, IconInfoOutlineRegular, IconPlusOutlineRegular, IconRefreshOutlineRegular,
+  IconSearchOutlineRegular, IconTrashOutlineRegular,
   IconWarningOutlineRegular, Input, Menu, MenuItemButton, Modal, pointerModality,
   PluginArtworkDefault, PluginArtworkLoop, PluginArtworkSearch, PluginArtworkSubagent, PluginArtworkTerminal,
   SegmentedTabs, StateDot, Switch, Tag, TerminalBlock, Toast, Tooltip, useAnchoredPosition, useDismissOnOutsidePointer,
   type IconProps, type StateDotState, type TerminalBlockLabels,
 } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { InjectFace, PropsLocale, PropsRenderSlots, PropsRuntime, PropsStore } from '@deepseek-ai/dsh-client-ui-slots'
+import type {
+  InjectFace, PluginHostState, PluginHostView, PropsLocale, PropsRenderSlots, PropsRuntime, PropsStore,
+} from '@deepseek-ai/dsh-client-ui-slots'
 import type { createNavigationStore } from './navigation-store.ts'
 import { rowConfigKey, type OfficialItem } from './config-ledger.ts'
 import { INSTALL_GIT_EXAMPLE, INSTALL_PATH_EXAMPLE, type PluginManagerLocaleKey } from './locales.ts'
@@ -32,6 +35,7 @@ import {
 import { managementText, noticeText, packageText, registryText, restartText, rowText, type Translate } from './presentation.ts'
 import type { PluginPackageRef, PluginRowRef, PluginsSubject } from './slot-contract.ts'
 import type { ConfigPageForm } from './slot-contract.ts'
+import { PluginHostSelector, type PluginHostFace } from './PluginHostSelector.tsx'
 import css from './PluginManagerPage.module.css'
 import badgeSkillPreview from './assets/badge-skill-preview.svg'
 import badgeSkillPreviewZh from './assets/badge-skill-preview.zh.svg'
@@ -44,11 +48,12 @@ export type PluginManagerPageProps =
   & PropsLocale<'pluginManager'>
   & PropsRenderSlots<
     | 'plugins.item' | 'plugins.bundle.config' | 'plugins.row.config' | 'plugins.bundle.activation'
-    | 'plugins.add.actions' | 'plugins.tab'
+    | 'plugins.add.actions' | 'plugins.tab' | 'plugins.host.page'
     | 'plugins.detail.actions' | 'plugins.detail.badge' | 'plugins.detail.section'
   >
   & InjectFace<PluginManagerFace>
   & PropsStore<ReturnType<typeof createNavigationStore>>
+  & { readonly pluginHosts?: PluginHostState | undefined; readonly selectPluginHost?: PluginHostView['select'] }
 
 /** The page's slot renderer, narrowed to the configuration slots. */
 type RenderConfig = PluginManagerPageProps['renderSlot']
@@ -986,11 +991,12 @@ function useInstallComposition(active: boolean) {
  * install scripts undecided shows them for approval in place of plain retry.
  */
 function InstallDialog({
-  install, t, onClose, onEditSpec, onRun, onCancel, onReconcile, onToggleDetails, onEnableNow, onApproveBuilds,
+  install, t, host, onClose, onEditSpec, onRun, onCancel, onReconcile, onToggleDetails, onEnableNow, onApproveBuilds,
   onToggleRegistry, onChooseRegistry, onChangeRegistry, onUseGithubMirror,
 }: {
   readonly install: InstallState
   readonly t: Translate
+  readonly host?: string | undefined
   readonly onClose: () => void
   readonly onEditSpec: (text: string) => void
   readonly onRun: () => void
@@ -1111,7 +1117,9 @@ function InstallDialog({
     const inputSentence = install.inputError === null ? null : inputProblemSentence(install.inputError, t, resolved)
     const templateHint = install.spec === INSTALL_GIT_EXAMPLE
       ? t('installGitTemplateHint')
-      : install.spec === INSTALL_PATH_EXAMPLE ? t('installPathTemplateHint') : null
+      : install.spec === INSTALL_PATH_EXAMPLE
+        ? host === undefined ? t('installPathTemplateHint') : t('installRemotePathTemplateHint', { host })
+        : null
     return (
       <Modal
         open={install.open}
@@ -1126,7 +1134,7 @@ function InstallDialog({
             <p className={css.installSafety} role="note">
               <IconWarningOutlineRegular size={14} aria-hidden="true" />
               <span className={css.installSafetyText}>
-                <span>{t('installGuideSafety')}</span>
+                <span>{host === undefined ? t('installGuideSafety') : t('installGuideRemoteSafety', { host })}</span>
                 <span>{t('installUpgradeNotice')}</span>
               </span>
             </p>
@@ -1498,6 +1506,32 @@ function ConfirmDialog({ name, t, onConfirm, onCancel }: {
   )
 }
 
+/**
+ * Project the selected SSH Host's page or render the manager for this runtime.
+ * @param props - the local manager and shell's Host selection.
+ * @returns the selected Host's plugin page or its disconnected status.
+ */
+export function PluginManagerPanel(props: PluginManagerPageProps & InjectFace<PluginHostFace>): ReactNode {
+  const hosts = props.usePluginHosts(snapshot => snapshot)
+  const tab = props.useStore(state => state.tab)
+  const selected = hosts.selected
+  if (props.projectedHost || selected === undefined) {
+    return <PluginManagerPage {...props} pluginHosts={hosts} selectPluginHost={props.selectPluginHost} />
+  }
+  if (hosts.connected.some(host => host.id === selected.id)) return props.renderSlot('plugins.host.page', { id: selected.id })
+  return (
+    <section className={css.page} data-plugin-panel>
+      <header className={css.pageHead} data-window-drag>
+        <h1 className={css.pageTitle}>{props.t('title')}</h1>
+        <PluginHostSelector t={props.t} hosts={hosts} tab={tab} select={props.selectPluginHost} />
+      </header>
+      <p className={`${css.status} ${css.statusWithDot}`} role="status">
+        <StateDot state="warning" />{props.t('pluginHostDisconnected', { host: selected.label })}
+      </p>
+    </section>
+  )
+}
+
 /** Render the plugin manager: the official plugins and installed bundles, their pages, the install dialog, and the confirmation. */
 export function PluginManagerPage(props: PluginManagerPageProps): ReactNode {
   const { t, ensure, renderSlot, resolveText } = props
@@ -1520,6 +1554,7 @@ export function PluginManagerPage(props: PluginManagerPageProps): ReactNode {
   useEffect(() => { if (state.highlight !== null) setTab(INSTALLED_TAB) }, [state.highlight, setTab])
   const tabsId = useId()
   const [activation, setActivation] = useState<string | null>(null)
+  const [search, setSearch] = useState('')
   useEffect(() => { ensure() }, [ensure])
   // Installation highlights visible cards without changing the user's current page.
   const { highlight, clearHighlight } = { highlight: state.highlight, clearHighlight: props.clearHighlight }
@@ -1539,6 +1574,13 @@ export function PluginManagerPage(props: PluginManagerPageProps): ReactNode {
     && (pkg.installed || pkg.official || pkg.error !== undefined))
   const mine = listed.filter(pkg => !pkg.official)
   const official = listed.filter(pkg => pkg.official)
+  const query = search.trim().toLocaleLowerCase()
+  const matches = (...fields: (string | undefined)[]): boolean =>
+    query === '' || fields.some(field => field?.toLocaleLowerCase().includes(query))
+  const matchesPackage = (pkg: PackageView): boolean => {
+    const { title, description } = packageText(pkg, resolveText)
+    return matches(pkg.name, title, description, pkg.description)
+  }
   // Both lists read one order over every offered bundle: the main list holds the always-held ones plus the held-back
   // ones the profile enabled, and the More list holds all of them, so enabling a bundle from the More list pins it
   // to the main list without moving it among its neighbours there.
@@ -1564,6 +1606,13 @@ export function PluginManagerPage(props: PluginManagerPageProps): ReactNode {
     ? {}
     : { role: 'tabpanel', id: `${tabsId}-${INSTALLED_TAB}-panel`, 'aria-labelledby': `${tabsId}-${INSTALLED_TAB}` }
   const activated = listed.find(pkg => pkg.name === activation && pkg.enabled && !state.busy.includes(pkg.name))
+  const hostControls = props.pluginHosts?.enabled && props.selectPluginHost !== undefined ? (
+    <>
+      <Input className={css.hostSearch as string} type="search" aria-label={t('searchPlugins')} placeholder={t('searchPlugins')}
+        icon={<IconSearchOutlineRegular size={14} />} value={search} onChange={(event) => { setSearch(event.target.value) }} />
+      <PluginHostSelector t={t} hosts={props.pluginHosts} tab={tab} select={props.selectPluginHost} />
+    </>
+  ) : null
   const setRowEnabled = (row: PackageRow, enabled: boolean): void => {
     /* v8 ignore next -- a row without a live entry has its switch disabled */
     if (row.entryId !== undefined) props.setRowEnabled(row.entryId, enabled)
@@ -1586,11 +1635,14 @@ export function PluginManagerPage(props: PluginManagerPageProps): ReactNode {
       onSetEnabled={(enabled) => { setActivation(enabled ? pkg.name : null); props.setEnabled(pkg.name, enabled) }}
     />
   )
-  const basicCards = ledger.items.map(item => (
+  const basicCards = ledger.items.filter(item => matches(item.label)).map(item => (
     <ItemCard key={`item:${item.id}`} item={item} t={t} renderSlot={renderSlot} onOpen={() => { setView({ kind: 'item', id: item.id }) }} />
   ))
+  const matchingMore = more.filter(matchesPackage)
+  const matchingExtensions = extensions.filter(matchesPackage)
+  const matchingMine = mine.filter(matchesPackage)
   const renderGroup = (id: 'basic' | 'extensions' | 'bundles', heading: string, cards: readonly ReactNode[]): ReactNode => {
-    const offersMore = id === 'extensions' && more.length > 0
+    const offersMore = id === 'extensions' && matchingMore.length > 0
     if (cards.length === 0 && !offersMore) return null
     return (
       <section className={css.group} data-plugin-scope="global" data-plugin-group={id}>
@@ -1623,7 +1675,8 @@ export function PluginManagerPage(props: PluginManagerPageProps): ReactNode {
                 </Tooltip>
               </div>
             </div>
-            <div className={css.toolbar} hidden={!onInstalled}>
+            <div className={css.toolbar} hidden={!onInstalled} data-host-tools={hostControls !== null || undefined}>
+              {onInstalled ? hostControls : null}
               <Tooltip label={t('refresh')} delayMs={500} focusDelayMs={500} side="bottom" portal disabled={!loaded || refreshing}>
                 <button type="button" className={css.iconButton} aria-label={t('refresh')} aria-busy={refreshing} disabled={!loaded || refreshing} onClick={props.refresh}>
                   <span className={css.iconWrap} aria-hidden="true">
@@ -1674,6 +1727,7 @@ export function PluginManagerPage(props: PluginManagerPageProps): ReactNode {
           <h1 className={css.pageTitle}>{t('moreTitle')}</h1>
         </header>
       ) : null}
+      {showsMoreList && hostControls !== null ? <div className={css.hostToolbar}>{hostControls}</div> : null}
       {installedCards && !loaded ? (
         <div className={css.installedPanel} {...installedPanel}>
           {state.status === 'loading' ? <ListSkeleton label={t('loading')} /> : null}
@@ -1748,15 +1802,18 @@ export function PluginManagerPage(props: PluginManagerPageProps): ReactNode {
             <div className={css.installedPanel} {...installedPanel}>
               {showsMoreList ? (
                 <section className={css.group} data-plugin-scope="global" data-plugin-group="more">
-                  <ul className={css.cards}>{more.map(packageCard)}</ul>
+                  <ul className={css.cards}>{matchingMore.map(packageCard)}</ul>
                 </section>
               ) : (
                 <>
                   {renderGroup('basic', t('basicTitle'), basicCards)}
-                  {renderGroup('extensions', t('extensionsTitle'), extensions.map(packageCard))}
-                  {renderGroup('bundles', t('bundlesTitle'), mine.map(packageCard))}
+                  {renderGroup('extensions', t('extensionsTitle'), matchingExtensions.map(packageCard))}
+                  {renderGroup('bundles', t('bundlesTitle'), matchingMine.map(packageCard))}
                 </>
               )}
+              {query !== '' && (showsMoreList ? matchingMore.length === 0
+                : basicCards.length === 0 && matchingMore.length === 0 && matchingMine.length === 0)
+                ? <p className={css.empty} role="status">{t('noMatchingPlugins')}</p> : null}
               {/* A failed package read trails the groups it left incomplete: right under the groups on a
                   first-load failure, and after the kept cards when a refresh fails over stale data. */}
               {state.status === 'error' && !refreshing
@@ -1784,6 +1841,7 @@ export function PluginManagerPage(props: PluginManagerPageProps): ReactNode {
       <InstallDialog
         install={state.install}
         t={t}
+        host={props.pluginHosts?.selected?.label}
         onClose={props.closeInstall}
         onEditSpec={props.editInstallSpec}
         onRun={props.runInstall}

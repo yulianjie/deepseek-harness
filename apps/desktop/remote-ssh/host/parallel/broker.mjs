@@ -69,7 +69,7 @@ export class ParallelHostBroker {
     this.#availability = undefined
   }
 
-  async open(id, expected, signal) {
+  async open(id, expected, signal, { password } = {}) {
     const availability = this.#availability?.signal
     if (!availability || availability.aborted) throw unavailable()
     signal?.throwIfAborted()
@@ -87,7 +87,9 @@ export class ParallelHostBroker {
     }
     setup.addEventListener('abort', cancel, { once: true })
     try {
-      const target = await this.#manager.connectNative(id)
+      const connection = this.#manager.connectNative(id, { password })
+      password = undefined
+      const target = await connection
       setup.removeEventListener('abort', cancel)
       setup.throwIfAborted()
       channel.target = target

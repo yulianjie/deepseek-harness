@@ -5,7 +5,7 @@ import {
   IconSlidersTwoOutlineRegular, IconTrashOutlineRegular, IconWarningOutlineRegular, Input, Menu, Modal, Pill,
   PluginArtworkDefault, StateDot, Tag, Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { InjectFace, PropsLocale, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
+import type { InjectFace, PropsLocale, PropsRenderSlots, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
 import type { MarketCompatibility, MarketListingEntry, MarketListingVersion, MarketSearchResult, MarketSort } from '@deepseek-ai/dsh-api-remotes/client'
 import type { DiscoverFace, DiscoverState, ListingFailure, ListingState, SourceFailure } from './market-store.ts'
 import {
@@ -15,6 +15,7 @@ import css from './DiscoverSection.module.css'
 
 /** Props of the Discover tab. */
 export type DiscoverSectionProps = PropsRuntime<'plugins.tab'> & PropsLocale<'pluginMarket'> & InjectFace<DiscoverFace>
+  & PropsRenderSlots<'plugins.discover.host'>
 
 type Translate = DiscoverSectionProps['t']
 
@@ -386,7 +387,7 @@ function unfiltered(query: DiscoverQuery): boolean {
   return query.text.trim() === '' && query.category === null && query.labels.length === 0
 }
 
-function Browser({ state, listing, t, face, language, onInstall, openPackage }: {
+function Browser({ state, listing, t, face, language, onInstall, openPackage, renderSlot }: {
   readonly state: DiscoverState
   readonly listing: ListingState
   readonly t: Translate
@@ -394,7 +395,7 @@ function Browser({ state, listing, t, face, language, onInstall, openPackage }: 
   readonly language: string
   readonly onInstall: (choice: InstallChoice) => void
   readonly openPackage: (name: string) => void
-}): ReactNode {
+} & PropsRenderSlots<'plugins.discover.host'>): ReactNode {
   const { query, value } = listing
   const [text, setText] = useState(query.text)
   const [menu, setMenu] = useState<OpenMenu>(null)
@@ -469,6 +470,7 @@ function Browser({ state, listing, t, face, language, onInstall, openPackage }: 
           )} />
         <Input className={css.search as string} type="search" icon={<IconSearchOutlineRegular size={14} />} value={text}
           placeholder={t('search')} aria-label={t('search')} onChange={(event) => { setText(event.target.value) }} />
+        {renderSlot('plugins.discover.host', {})}
         {declarations.labels.length === 0 ? null : (
           <Menu open={menu === 'filter'} onClose={() => { setMenu(null) }} portal autoFocus align="end" selectedIds={query.labels}
             items={declarations.labels.map(item => ({ id: item.id, label: item.title }))}
@@ -581,11 +583,12 @@ export function DiscoverSection(props: DiscoverSectionProps): ReactNode {
   } else {
     body = (
       <Browser key={state.listing.url} state={state} listing={state.listing} t={t} face={face} language={language}
-        onInstall={(choice) => { setConfirming(choice) }} openPackage={openPackage} />
+        onInstall={(choice) => { setConfirming(choice) }} openPackage={openPackage} renderSlot={props.renderSlot} />
     )
   }
   return (
     <div className={css.section} data-plugin-tab="discover">
+      {state.status === 'ready' && state.listing !== null ? null : props.renderSlot('plugins.discover.host', {})}
       {body}
       <SourcesDialog state={state} t={t} face={face} />
       <ConfirmDialog choice={confirming} t={t} face={face} onCancel={() => { setConfirming(null) }}

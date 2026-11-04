@@ -114,6 +114,8 @@ export interface PluginAddActionsProps {
 
 declare module '@deepseek-ai/dsh-client-ui-slots' {
   interface SlotMap {
+    /** The Host selector next to Discover's search field. */
+    'plugins.discover.host': { kind: 'single'; scope: 'root' }
     /** Additional MenuItemButton rows after installation: 72px high, with a title and a description capped at two lines. */
     'plugins.add.actions': { kind: 'list'; scope: 'root'; owner: PluginAddActionsProps }
     /**

@@ -65,6 +65,31 @@ export interface HostWorkspaceSidebar {
   startSession(): boolean
 }
 
+/** An SSH Host that can own the Plugins panel. */
+export interface PluginHostChoice {
+  readonly id: string
+  readonly label: string
+}
+
+/** The connected plugin targets and the selected Host, even if it went offline. */
+export interface PluginHostState {
+  readonly enabled: boolean
+  readonly connected: readonly PluginHostChoice[]
+  readonly selected?: PluginHostChoice
+}
+
+/** Shell-owned plugin Host selection shared with isolated Host views. */
+export interface PluginHostView {
+  readonly projected: boolean
+  readonly state: HostObservable<PluginHostState>
+  /**
+   * Show the named Host's plugin list in the current tab.
+   * @param id - a connected Host id, or an empty string for the local Host.
+   * @param tab - the active plugin tab.
+   */
+  select(id: string, tab: string): void
+}
+
 declare module '@deepseek-ai/cordis' {
   interface Context {
     /** Shell-owned visibility of its additional Host pane. */
@@ -79,6 +104,16 @@ declare module '@deepseek-ai/cordis' {
     focusHostWorkspace?: () => void
     /** Commands registered by this runtime's native Workspace UI. */
     hostWorkspaceActions?: { startSession(): void; addWorkspace(): void }
+    /** Selection when the shell can project an additional Host's Plugins panel. */
+    pluginHostView?: PluginHostView
+    /** Commands registered by this runtime's Plugins panel. */
+    hostPluginActions?: {
+      /**
+       * Prepare the requested list tab before projecting this runtime's panel.
+       * @param tab - a plugin tab id.
+       */
+      selectListTab(tab: string): void
+    }
   }
 }
 
@@ -88,6 +123,8 @@ declare module './index.ts' {
     'sidebar.workspaces': { kind: 'single'; scope: 'root'; owner: WorkspaceSidebarOwner }
     /** The shell's center area while another Host owns the foreground pane. */
     'shell.host-pane': { kind: 'single'; scope: 'root' }
+    /** The selected additional Host's Plugins panel projected into the shell. */
+    'plugins.host.page': { kind: 'single'; scope: 'root'; owner: { readonly id: string } }
   }
 }
 

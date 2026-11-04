@@ -45,11 +45,13 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
   }
 }
 
-/** Root owner share: the shell supplies nothing — the frame is inject-assembled. */
+/** Root owner share for the shell frame and isolated Host projections. */
 export interface RootOwnerProps {
   children?: never
   /** Render only the workspace projection from a Host pane's own registry. */
   workspaceSidebar?: import('@deepseek-ai/dsh-client-ui-slots').WorkspaceSidebarOwner
+  /** Render a main panel from a Host pane's own registry without a second frame. */
+  hostMainPanel?: string
 }
 
 /** Instance key for root-scoped store records (session records key by session id, so the literal cannot collide). */

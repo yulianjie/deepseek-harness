@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { ConnectionError, OpenSsh } from './ssh.mjs';
+import { ConnectionError, OpenSsh, resolveIdentityFile } from './ssh.mjs';
 import { isSshAlias } from './ssh-config.mjs';
 
 export { ConnectionError, OpenSsh, buildSshArgs, diagnoseSshFailure, parseSshConfig } from './ssh.mjs';
@@ -22,7 +22,7 @@ function assertId(id) {
   if (typeof id !== 'string' || !ID.test(id)) throw unknownHost();
 }
 
-function hostRecord({ id, alias, label, instance }) {
+function hostRecord({ id, alias, label, instance, authMode = 'config', identityFile }) {
   assertId(id);
   if (!isSshAlias(alias)) throw new ConnectionError('INVALID_ALIAS', 'Enter a literal OpenSSH Host alias or hostname.');
   if (typeof label !== 'string' || !label.trim() || label.length > 100 || /\p{Cc}/u.test(label)) {
@@ -31,7 +31,28 @@ function hostRecord({ id, alias, label, instance }) {
   if (typeof instance !== 'string' || !INSTANCE.test(instance)) {
     throw new ConnectionError('INVALID_INSTANCE', 'The instance name must start with a letter or digit and use up to 64 letters, digits, dots, dashes or underscores.');
   }
-  return { id, alias, label: label.trim(), instance };
+  if (!['config', 'key', 'password'].includes(authMode)) {
+    throw new ConnectionError('INVALID_AUTH_MODE', 'Select an SSH authentication method.');
+  }
+  if (authMode === 'key') resolveIdentityFile(identityFile);
+  return { id, alias, label: label.trim(), instance, authMode, ...(authMode === 'key' ? { identityFile } : {}) };
+}
+
+function connectionPassword(authMode, password) {
+  if (authMode !== 'password') return undefined;
+  if (password === undefined || password === '') {
+    throw new ConnectionError('SSH_PASSWORD_REQUIRED', 'Enter the SSH password to connect to this host.');
+  }
+  if (typeof password !== 'string' || !password.isWellFormed() || Buffer.byteLength(password) > 1023 || /[\0\r\n]/.test(password)) {
+    throw new ConnectionError(
+      'INVALID_PASSWORD', 'Enter an SSH password without line breaks or null characters and up to 1023 UTF-8 bytes.',
+    );
+  }
+  return password;
+}
+
+function sameConnection(a, b) {
+  return a.alias === b.alias && a.instance === b.instance && a.authMode === b.authMode && a.identityFile === b.identityFile;
 }
 
 function validateDeployment(value) {
@@ -129,11 +150,12 @@ export class ConnectionManager {
     return this.#ssh.discover();
   }
 
-  save({ id, alias, label, instance } = {}) {
+  save({ id, alias, label, instance, authMode, identityFile } = {}) {
     return this.#schedule(async () => {
       const existing = id === undefined ? undefined : await this.#readHost(id);
       const host = hostRecord({ id: id ?? randomUUID(), alias, label: label ?? existing?.label ?? alias,
-        instance: instance ?? existing?.instance ?? 'default' });
+        instance: instance ?? existing?.instance ?? 'default', authMode: authMode === undefined ? existing?.authMode : authMode,
+        identityFile: identityFile === undefined ? existing?.identityFile : identityFile });
       const filename = join(this.#directory, `${host.id}.json`);
       const temp = join(this.#directory, `${randomUUID()}.tmp`);
       await mkdir(this.#directory, { recursive: true, mode: 0o700 });
@@ -143,7 +165,7 @@ export class ConnectionManager {
       } finally {
         await rm(temp, { force: true });
       }
-      if (existing && (existing.alias !== host.alias || existing.instance !== host.instance)) {
+      if (existing && !sameConnection(existing, host)) {
         await this.#disconnect(host.id);
       }
       return host;
@@ -169,21 +191,25 @@ export class ConnectionManager {
     };
   }
 
-  /** Open a server-side SSH forward for the broker to authenticate. */
-  async connectNative(id) {
+  /** Open a server-side SSH forward. A password is used only during a new connection's setup. */
+  async connectNative(id, { password } = {}) {
     const entry = await this.#schedule(async () => {
       const host = await this.#readHost(id);
       const current = this.#entries.get(id);
       if (current && current.state !== 'error' && current.state !== 'disconnected' &&
-          current.host.alias === host.alias && current.host.instance === host.instance) {
+          sameConnection(current.host, host)) {
         return current;
       }
+      const authentication = { password: connectionPassword(host.authMode, password) };
+      password = undefined;
       await this.#disconnect(id);
       if (this.#disposal) throw cancelled();
       const entry = { host, controller: new AbortController(), readiness: newReadiness(), state: 'connecting', stage: 'resolve' };
       this.#entries.set(id, entry);
-      entry.task = this.#supervise(entry);
+      entry.task = this.#supervise(entry, authentication);
       return entry;
+    }).finally(() => {
+      password = undefined;
     });
     do {
       await entry.readiness.promise;
@@ -215,11 +241,11 @@ export class ConnectionManager {
     return this.#disposal;
   }
 
-  async #supervise(entry) {
+  async #supervise(entry, authentication) {
     const { host, controller: { signal } } = entry;
     let tunnel;
     try {
-      const config = await this.#ssh.resolve(host.alias, { signal });
+      const config = await this.#ssh.resolve(host.alias, { signal, identityFile: host.identityFile });
       if (config?.settings?.localforward || config?.settings?.remoteforward || config?.settings?.dynamicforward) {
         throw new ConnectionError('SSH_CONFIGURED_FORWARD', 'Use a dedicated SSH alias without configured LocalForward, RemoteForward or DynamicForward rules.');
       }
@@ -227,10 +253,13 @@ export class ConnectionManager {
       entry.stage = 'deploy';
       entry.deployment = validateDeployment(await this.#deploy(host, ({ stage } = {}) => {
         if (!signal.aborted && /^[a-z][a-z0-9_-]{0,39}$/.test(stage ?? '')) entry.stage = stage;
-      }, signal));
+      }, signal, authentication));
       signal.throwIfAborted();
       entry.stage = 'tunnel';
-      tunnel = await this.#ssh.openTunnel(host.alias, entry.deployment.remotePort, { signal });
+      tunnel = await this.#ssh.openTunnel(host.alias, entry.deployment.remotePort, {
+        signal, identityFile: host.identityFile, authentication,
+      });
+      authentication.password = undefined;
       signal.throwIfAborted();
       const tunnelLifetime = new AbortController();
       const drop = tunnel.closed.then((error) => {
@@ -252,6 +281,7 @@ export class ConnectionManager {
       entry.state = signal.aborted ? 'disconnected' : 'error';
       entry.error = signal.aborted ? undefined : failure;
     } finally {
+      authentication.password = undefined;
       if (tunnel) await tunnel.close();
       if (entry.deployment) delete entry.deployment.token;
     }

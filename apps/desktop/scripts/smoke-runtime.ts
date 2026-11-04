@@ -1,6 +1,6 @@
 /** Boot the materialized target runtime without access to a user's Harness profile. */
 
-import { appendFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { accessSync, appendFileSync, constants, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -159,6 +159,8 @@ export function apply(ctx) {
       throw new Error('desktop runtime: packaged frontend smoke failed')
     }
     if (remoteSshDir !== undefined) {
+      const helper = join(remoteSshDir, 'host', 'connection', process.platform === 'win32' ? 'askpass.exe' : 'askpass.sh')
+      accessSync(helper, constants.X_OK)
       const hostsUrl = new URL('/api/remote-ssh/hosts', ready.url)
       const anonymous = await fetch(hostsUrl)
       if (anonymous.status !== 401 && anonymous.status !== 403) {

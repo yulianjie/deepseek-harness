@@ -1,18 +1,27 @@
 import { spawn } from 'node:child_process';
-import { statSync } from 'node:fs';
+import { constants, statSync } from 'node:fs';
+import { access, stat } from 'node:fs/promises';
 import { createServer } from 'node:net';
+import { homedir } from 'node:os';
 import path from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
+import { fileURLToPath } from 'node:url';
+import { startAskpass } from './askpass.mjs';
 import { discoverSshAliases, isSshAlias } from './ssh-config.mjs';
 
 const LOOPBACK = '127.0.0.1';
 const MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
 const SSH_OPTIONS = [
-  'BatchMode=yes', 'StrictHostKeyChecking=yes', 'VerifyHostKeyDNS=no', 'UpdateHostKeys=no',
+  'StrictHostKeyChecking=yes', 'VerifyHostKeyDNS=no', 'UpdateHostKeys=no',
   'NoHostAuthenticationForLocalhost=no', 'PermitLocalCommand=no', 'RemoteCommand=none',
   'ControlMaster=no', 'ControlPersist=no', 'ControlPath=none', 'ForkAfterAuthentication=no',
   'ForwardAgent=no', 'ForwardX11=no', 'Tunnel=no', 'GatewayPorts=no', 'EscapeChar=none',
   'ConnectTimeout=10', 'ConnectionAttempts=1', 'ServerAliveInterval=10', 'ServerAliveCountMax=2',
+];
+const PASSWORD_OPTIONS = [
+  'BatchMode=no', 'PreferredAuthentications=password', 'PasswordAuthentication=yes',
+  'KbdInteractiveAuthentication=no', 'PubkeyAuthentication=no', 'HostbasedAuthentication=no',
+  'GSSAPIAuthentication=no', 'NumberOfPasswordPrompts=1',
 ];
 
 function systemSshExecutable() {
@@ -46,12 +55,48 @@ function assertPort(port) {
   }
 }
 
+function invalidIdentityFile() {
+  return new ConnectionError(
+    'INVALID_IDENTITY_FILE', 'Enter a readable local SSH private key file using an absolute path or a path starting with ~/.',
+  );
+}
+
+/** Resolve a literal local path without allowing OpenSSH's token or environment expansion. */
+export function resolveIdentityFile(identityFile, home = homedir()) {
+  if (typeof identityFile !== 'string' || !identityFile.isWellFormed() || Buffer.byteLength(identityFile) > 2048) {
+    throw invalidIdentityFile();
+  }
+  if (identityFile.startsWith('~/') || (process.platform === 'win32' && identityFile.startsWith('~\\'))) {
+    identityFile = `${home}${path.sep}${identityFile.slice(2)}`;
+  }
+  if (/[\p{Cc}%]|\$\{/u.test(identityFile) || !path.isAbsolute(identityFile) ||
+      (process.platform === 'win32' && path.parse(identityFile).root.length < 3)) {
+    throw invalidIdentityFile();
+  }
+  return identityFile;
+}
+
+async function readableIdentityFile(identityFile, home) {
+  const filename = resolveIdentityFile(identityFile, home);
+  try {
+    if ((await stat(filename)).isFile()) {
+      await access(filename, constants.R_OK);
+      return filename;
+    }
+  } catch {
+    throw invalidIdentityFile();
+  }
+  throw invalidIdentityFile();
+}
+
 /** Every destination occupies one argv entry. Remote commands contain no user data. */
-export function buildSshArgs(alias, { mode = 'script', configPath, localPort, remotePort } = {}) {
+export function buildSshArgs(alias, { mode = 'script', configPath, localPort, remotePort, identityFile, passwordAuth = false } = {}) {
   if (!isSshAlias(alias)) throw new ConnectionError('INVALID_ALIAS', 'Enter a literal OpenSSH Host alias or hostname.');
   const args = ['-T'];
   if (configPath) args.push('-F', configPath);
   for (const option of SSH_OPTIONS) args.push('-o', option);
+  for (const option of passwordAuth ? PASSWORD_OPTIONS : ['BatchMode=yes']) args.push('-o', option);
+  if (identityFile !== undefined) args.push('-o', 'IdentitiesOnly=yes', '-i', identityFile);
   switch (mode) {
     case 'config':
       args.push('-G', '-o', 'ClearAllForwardings=no');
@@ -84,7 +129,7 @@ export function parseSshConfig(output) {
   return result;
 }
 
-export function diagnoseSshFailure(stderr, fallback = 'SSH_FAILED') {
+export function diagnoseSshFailure(stderr, fallback = 'SSH_FAILED', passwordAuth = false) {
   stderr = stderr.split(/\r?\n/).filter((line) => !/^debug[123]:/.test(line)).join('\n');
   if (/remote host identification has changed|offending .*key|host key.*(?:changed|revoked)/i.test(stderr)) {
     return new ConnectionError('SSH_HOST_KEY_CHANGED', 'The SSH host key changed or was revoked. Verify the new fingerprint with the host administrator.');
@@ -92,17 +137,29 @@ export function diagnoseSshFailure(stderr, fallback = 'SSH_FAILED') {
   if (/host key verification failed|no .*host key is known|strict checking/i.test(stderr)) {
     return new ConnectionError('SSH_HOST_KEY_UNVERIFIED', 'Verify the SSH host fingerprint in an interactive OpenSSH session to register it in known_hosts.');
   }
-  if (/permission denied.*(?:keyboard-interactive|password)|authentication.*(?:keyboard-interactive|password)/i.test(stderr)) {
-    return new ConnectionError('SSH_INTERACTIVE_AUTH_REQUIRED', 'SSH requires an interactive authentication method. Configure a key or an authenticated SSH agent for the host.');
+  if (/ssh_askpass:|(?:exec|posix_spawnp).*askpass/i.test(stderr)) {
+    return new ConnectionError(
+      'SSH_ASKPASS_UNAVAILABLE', 'OpenSSH could not start the password helper. Check the Desktop installation and OpenSSH client.',
+    );
+  }
+  if (/bad owner or permissions|unprotected private key file/i.test(stderr)) {
+    return new ConnectionError(
+      'SSH_BAD_PERMISSIONS', 'OpenSSH refused the SSH configuration or key file. Check its ownership and access controls.',
+    );
+  }
+  const interactiveDenied = /permission denied.*(?:keyboard-interactive|password)|authentication.*(?:keyboard-interactive|password)/i;
+  if (!passwordAuth && interactiveDenied.test(stderr)) {
+    return new ConnectionError(
+      'SSH_INTERACTIVE_AUTH_REQUIRED', 'Select SSH password authentication or configure a key or SSH agent for the host.',
+    );
   }
   if (/permission denied|no supported authentication|authentication failed|agent refused/i.test(stderr)) {
-    return new ConnectionError('SSH_AUTH_FAILED', 'OpenSSH could not authenticate. Check the host user, key and SSH agent.');
+    return new ConnectionError('SSH_AUTH_FAILED', passwordAuth
+      ? 'OpenSSH could not authenticate with the password. Check the SSH user, password and the server’s password authentication settings.'
+      : 'OpenSSH could not authenticate. Check the host user, key and SSH agent.');
   }
   if (/could not resolve hostname|name or service not known|nodename nor servname provided/i.test(stderr)) {
     return new ConnectionError('SSH_HOST_NOT_FOUND', 'OpenSSH could not resolve the host. Check the SSH Host alias and HostName.');
-  }
-  if (/bad owner or permissions|unprotected private key file/i.test(stderr)) {
-    return new ConnectionError('SSH_BAD_PERMISSIONS', 'OpenSSH refused an SSH configuration or key file with insecure permissions. Check its ownership and access controls.');
   }
   if (/address already in use|cannot listen to port|could not request local forwarding/i.test(stderr)) {
     return new ConnectionError('SSH_FORWARD_BIND_FAILED', 'OpenSSH could not bind its loopback forward.');
@@ -115,14 +172,18 @@ export function diagnoseSshFailure(stderr, fallback = 'SSH_FAILED') {
     : 'OpenSSH failed. Check the alias and its configuration with the system ssh command.');
 }
 
-function spawnSsh(executable, args) {
-  return spawn(executable, args, {
+function spawnSsh(executable, args, askpass) {
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
+    !/KEY|SECRET|TOKEN|PASSWORD|^SSH_ASKPASS|^DSH_SSH_ASKPASS/i.test(key)));
+  const child = spawn(executable, args, {
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true,
     // Isolate /dev/tty prompts and allow owned ProxyJump/ProxyCommand children to be closed together.
     detached: process.platform !== 'win32',
-    env: { ...process.env, SSH_ASKPASS_REQUIRE: 'never', LC_ALL: 'C', LANG: 'C' },
+    env: { ...env, SSH_ASKPASS_REQUIRE: 'never', LC_ALL: 'C', LANG: 'C', ...askpass?.env },
   });
+  askpass?.allow(child.pid);
+  return child;
 }
 
 function killSsh(child) {
@@ -141,10 +202,10 @@ function spawnFailure(error) {
     : new ConnectionError('SSH_SPAWN_FAILED', 'The system OpenSSH client could not be started.');
 }
 
-function captureSsh(executable, args, { signal, input, timeout, onStderr, config = false }) {
+function captureSsh(executable, args, { signal, input, timeout, onStderr, config = false, askpass }) {
   signal?.throwIfAborted();
   return new Promise((resolve, reject) => {
-    const child = spawnSsh(executable, args);
+    const child = spawnSsh(executable, args, askpass);
     const stdout = [];
     const stderr = [];
     const stderrDecoder = onStderr ? new StringDecoder('utf8') : undefined;
@@ -171,7 +232,7 @@ function captureSsh(executable, args, { signal, input, timeout, onStderr, config
       if (!config && code !== 255) {
         return reject(new ConnectionError('SSH_REMOTE_SCRIPT_FAILED', `The remote setup script exited with status ${code}.`));
       }
-      reject(diagnoseSshFailure(details, config ? 'SSH_CONFIG_FAILED' : 'SSH_FAILED'));
+      reject(diagnoseSshFailure(details, config ? 'SSH_CONFIG_FAILED' : 'SSH_FAILED', askpass !== undefined));
     });
     function collect(chunk, destination) {
       bytes += chunk.length;
@@ -202,10 +263,10 @@ async function allocatePort() {
   });
 }
 
-function startTunnel(executable, args, port, signal) {
+function startTunnel(executable, args, port, signal, askpass) {
   signal?.throwIfAborted();
   return new Promise((resolve, reject) => {
-    const child = spawnSsh(executable, args);
+    const child = spawnSsh(executable, args, askpass);
     child.stdin.on('error', () => {});
     child.stdin.end();
     child.stdout.resume();
@@ -241,7 +302,7 @@ function startTunnel(executable, args, port, signal) {
     child.once('close', () => {
       clearTimeout(timer);
       signal?.removeEventListener('abort', abort);
-      const error = failure ?? diagnoseSshFailure(stderr, 'SSH_TUNNEL_CLOSED');
+      const error = failure ?? diagnoseSshFailure(stderr, 'SSH_TUNNEL_CLOSED', askpass !== undefined);
       settleClosed(requestedClose ? undefined : error);
       if (!ready) reject(error);
     });
@@ -249,18 +310,21 @@ function startTunnel(executable, args, port, signal) {
 }
 
 export class OpenSsh {
-  constructor({ executable = systemSshExecutable(), configPath, home } = {}) {
+  constructor({ executable = systemSshExecutable(), configPath, home,
+    askpassExecutable = process.env.DSH_DESKTOP_SSH_ASKPASS_EXECUTABLE } = {}) {
     this.executable = executable;
     this.configPath = configPath;
     this.home = home;
+    this.askpassExecutable = askpassExecutable;
   }
 
   discover() {
     return discoverSshAliases({ home: this.home, configPath: this.configPath });
   }
 
-  async resolve(alias, { signal } = {}) {
-    const args = buildSshArgs(alias, { mode: 'config', configPath: this.configPath });
+  async resolve(alias, { signal, identityFile } = {}) {
+    const filename = identityFile === undefined ? undefined : await readableIdentityFile(identityFile, this.home);
+    const args = buildSshArgs(alias, { mode: 'config', configPath: this.configPath, identityFile: filename });
     const { stdout } = await captureSsh(this.executable, args, { signal, timeout: 15_000, config: true });
     const settings = parseSshConfig(stdout);
     const hostname = settings.hostname?.[0];
@@ -269,27 +333,69 @@ export class OpenSsh {
     if (!hostname || !user || !Number.isInteger(port) || port < 1 || port > 65535) {
       throw new ConnectionError('SSH_CONFIG_FAILED', 'OpenSSH returned an incomplete host configuration.');
     }
-    return { alias, hostname, user, port, settings };
+    return { alias, hostname, user, port, settings, identityFile: filename };
   }
 
-  runScript(alias, script, { signal, onStderr, timeout = 600_000 } = {}) {
+  async #withAskpass(password, action) {
+    if (password === undefined) return action(undefined);
+    const windows = process.platform === 'win32';
+    let askpass;
+    let executable;
+    let nodeEnvironment;
+    try {
+      executable = this.askpassExecutable ?? fileURLToPath(new URL(windows ? './askpass.exe' : './askpass.sh', import.meta.url));
+      if (!path.isAbsolute(executable) || !(await stat(executable)).isFile()) {
+        throw new Error('Missing executable');
+      }
+      await access(executable, constants.X_OK);
+      if (!windows) {
+        nodeEnvironment = {
+          DSH_SSH_ASKPASS_NODE: process.execPath,
+          DSH_SSH_ASKPASS_ENTRY: fileURLToPath(new URL('./askpass-client.mjs', import.meta.url)),
+        };
+      }
+      askpass = await startAskpass(password);
+    } catch {
+      throw new ConnectionError(
+        'SSH_ASKPASS_UNAVAILABLE', 'The local OpenSSH password helper is unavailable. Check the Desktop installation.',
+      );
+    } finally {
+      password = undefined;
+    }
+    Object.assign(askpass.env, {
+      SSH_ASKPASS: executable, SSH_ASKPASS_REQUIRE: 'force',
+      ...nodeEnvironment,
+    });
+    try {
+      return await action(askpass);
+    } finally {
+      await askpass.close();
+    }
+  }
+
+  async runScript(alias, script, { signal, onStderr, timeout = 600_000, identityFile, authentication } = {}) {
     if (typeof script !== 'string' && !Buffer.isBuffer(script)) throw new TypeError('Expected a remote script.');
-    const args = buildSshArgs(alias, { configPath: this.configPath });
-    return captureSsh(this.executable, args, { signal, input: script, onStderr, timeout });
+    const filename = identityFile === undefined ? undefined : await readableIdentityFile(identityFile, this.home);
+    const args = buildSshArgs(alias, {
+      configPath: this.configPath, identityFile: filename, passwordAuth: authentication?.password !== undefined,
+    });
+    return this.#withAskpass(authentication?.password, askpass =>
+      captureSsh(this.executable, args, { signal, input: script, onStderr, timeout, askpass }));
   }
 
-  async openTunnel(alias, remotePort, { signal } = {}) {
+  async openTunnel(alias, remotePort, { signal, identityFile, authentication } = {}) {
     assertPort(remotePort);
-    const { settings } = await this.resolve(alias, { signal });
+    const { settings, identityFile: filename } = await this.resolve(alias, { signal, identityFile });
     // ClearAllForwardings=yes would clear the command-line -L as well.
     if (settings.localforward || settings.remoteforward || settings.dynamicforward) {
       throw new ConnectionError('SSH_CONFIGURED_FORWARD', 'Use a dedicated SSH alias without configured LocalForward, RemoteForward or DynamicForward rules.');
     }
     for (let attempt = 0; attempt < 3; attempt++) {
       const localPort = await allocatePort();
-      const args = buildSshArgs(alias, { mode: 'tunnel', configPath: this.configPath, localPort, remotePort });
+      const args = buildSshArgs(alias, { mode: 'tunnel', configPath: this.configPath, localPort, remotePort,
+        identityFile: filename, passwordAuth: authentication?.password !== undefined });
       try {
-        return await startTunnel(this.executable, args, localPort, signal);
+        return await this.#withAskpass(authentication?.password, askpass => startTunnel(this.executable, args, localPort, signal, askpass));
       } catch (error) {
         if (error.code !== 'SSH_FORWARD_BIND_FAILED' || attempt === 2) throw error;
       }

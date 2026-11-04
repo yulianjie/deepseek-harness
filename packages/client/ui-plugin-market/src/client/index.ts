@@ -50,5 +50,6 @@ export function apply(ctx: ClientContext): void {
   const t = ctx.locale.bind(NS)
   ctx.slots.inject('plugins.tab', () => ctx.slots.register({
     name: 'plugins.tab', id: 'discover', label: () => t('title'), locale: NS, inject: () => face,
+    children: { 'plugins.discover.host': { kind: 'single', scope: 'root' } },
   }, DiscoverSection))
 }

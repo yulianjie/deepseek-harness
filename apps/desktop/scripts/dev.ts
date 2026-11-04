@@ -74,6 +74,17 @@ async function launchElectron(reusedPrimaryRuntime?: string): Promise<void> {
     DSH_DESKTOP_OPEN_DEVTOOLS: process.env.DSH_DESKTOP_OPEN_DEVTOOLS ?? '1',
     ELECTRON_ENABLE_LOGGING: process.env.ELECTRON_ENABLE_LOGGING ?? '1',
   }
+  if (process.platform === 'win32' && !environment.DSH_DESKTOP_SSH_ASKPASS_EXECUTABLE) {
+    const output = join(DEVELOPMENT_ROOT, 'ssh-askpass')
+    try {
+      await run('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+        join(APP_ROOT, 'scripts', 'prepare-windows-ssh-askpass.ps1'), '-OutputDirectory', output], APP_ROOT)
+      environment.DSH_DESKTOP_SSH_ASKPASS_EXECUTABLE = join(output, 'askpass.exe')
+    } catch (error) {
+      // The development shell can still use OpenSSH configuration and keys.
+      console.warn('Desktop development: SSH password helper could not build.', error)
+    }
+  }
   console.log(`desktop development: DSH_HOME=${home}`)
   console.log(`desktop development: userData=${userData}`)
   console.log(`desktop development: inspectors main=${String(mainPort)}, renderer=${String(rendererPort)}, host=${String(hostPort)}`)

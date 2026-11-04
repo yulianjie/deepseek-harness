@@ -37,6 +37,18 @@ describe('installer preparation preserves application dependencies', () => {
     expect(config.extraMetadata).not.toHaveProperty('dshMandatoryUpdatePolicy')
     expect(config.extraMetadata).not.toHaveProperty('dshDesktopUpdateChannel')
     expect(config.extraResources).toContainEqual(expect.objectContaining({ to: 'remote-ssh' }))
+    const passwordHelper = config.extraResources.find(resource => resource.to === 'remote-ssh/host/connection/askpass.exe')
+    execute.mockClear()
+    await config.beforeBuild()
+    if (platform === 'win32') {
+      expect(passwordHelper?.from).toMatch(/ssh-askpass[/\\]askpass\.exe$/)
+      expect(execute).toHaveBeenCalledWith('powershell.exe', expect.arrayContaining([
+        expect.stringMatching(/prepare-windows-ssh-askpass\.ps1$/),
+      ]), expect.anything())
+    } else {
+      expect(passwordHelper).toBeUndefined()
+      expect(execute).not.toHaveBeenCalled()
+    }
   })
 
   it.each(['win32', 'darwin'] as const)('rejects a missing production policy before signing on %s', async (platform) => {

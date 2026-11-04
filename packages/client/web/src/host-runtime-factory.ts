@@ -1,11 +1,14 @@
 /** Assemble a Host pane from the shell's local, built-in client plugins. */
 import type { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
+import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
 import type { ClientModuleLoader } from '@deepseek-ai/dsh-client-modules/client'
 import type {} from '@deepseek-ai/dsh-client-shortcuts/client'
 import { createSnapshotStore, type ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
-import type { HostWorkspaceProjection, RootSessionSelection } from '@deepseek-ai/dsh-client-ui-slots'
-import { createElement, useSyncExternalStore, type ReactNode } from 'react'
+import type {
+  HostWorkspaceProjection, PluginHostChoice, PluginHostState, PluginHostView, PropsRuntime, RootSessionSelection,
+} from '@deepseek-ai/dsh-client-ui-slots'
+import { createElement, Fragment, useSyncExternalStore, type ReactNode } from 'react'
 import { assertEntriesActive } from './boot-client.ts'
 import { createHostRuntime, type HostKey, type HostRuntime, type HostRuntimeOptions } from './host-runtime.ts'
 
@@ -45,6 +48,8 @@ const OPTIONAL_PLUGINS = [
   '@deepseek-ai/dsh-client-ui-commands',
   '@deepseek-ai/dsh-client-ui-model-selection',
   '@deepseek-ai/dsh-client-ui-permission-presets',
+  '@deepseek-ai/dsh-client-ui-plugin-manager',
+  '@deepseek-ai/dsh-client-ui-plugin-market',
   '@deepseek-ai/dsh-client-ui-settings-models',
   '@deepseek-ai/dsh-client-ui-agent-preset',
   '@deepseek-ai/dsh-client-ui-reference',
@@ -88,6 +93,8 @@ export interface HostRuntimeFactory {
   showPane(hostKey: HostKey, session?: RootSessionSelection['session']): void
   /** Return the shell to the local Host. */
   showLocal(): void
+  /** Enable the Host selector in the Plugins panel after the Desktop SSH provider loads. */
+  enablePluginHostSelection(): void
 }
 
 declare module '@deepseek-ai/cordis' {
@@ -103,7 +110,7 @@ function hasConnectionInstaller(value: unknown): value is Pick<HostRuntimeOption
 }
 
 async function openFromLocalModules(modules: ClientModuleLoader, options: HostRuntimeOpenOptions,
-  foreground: ObservableSnapshot<boolean>, focus: () => void, shell: Context): Promise<HostRuntime> {
+  foreground: ObservableSnapshot<boolean>, focus: () => void, shell: Context, pluginHostView: PluginHostView): Promise<HostRuntime> {
   const available = new Set(modules.manifest.plugins.map(row => row.id))
   const missing = [CONNECTION, ...REQUIRED_PLUGINS].filter(name => !available.has(name))
   if (missing.length > 0) throw new Error(`host runtime: missing local client plugins: ${missing.join(', ')}`)
@@ -124,6 +131,7 @@ async function openFromLocalModules(modules: ClientModuleLoader, options: HostRu
     installConnection: connection.installConnection,
     async compose(ctx) {
       ctx.provide('focusHostWorkspace', focus)
+      ctx.provide('pluginHostView', pluginHostView)
       const shellShortcuts = shell.get('shortcuts')
       if (shellShortcuts !== undefined) ctx.provide('hostWindowShortcuts', shellShortcuts)
       await ctx.plugin(Loader)
@@ -151,6 +159,36 @@ export function provideHostRuntimeFactory(ctx: Context, modules: ClientModuleLoa
   const projections = createSnapshotStore<readonly HostWorkspaceProjection[]>([])
   const selection = createSnapshotStore<{ runtime: HostRuntime; target?: RootSessionSelection } | undefined>(undefined)
   const conversationVisible = createSnapshotStore(false)
+  const pluginTargets = new Map<string, {
+    readonly choice: PluginHostChoice
+    readonly runtime: HostRuntime
+    readonly connection: ConnectionHandle
+  }>()
+  const pluginHosts = createSnapshotStore<PluginHostState>({ enabled: false, connected: [] })
+  let pluginTab = 'installed'
+  const syncPluginHosts = (): void => {
+    pluginHosts.set({
+      ...pluginHosts.getSnapshot(),
+      connected: [...pluginTargets.values()]
+        .filter(({ connection }) => connection.state.getSnapshot() === 'connected')
+        .map(({ choice }) => choice),
+    })
+  }
+  const selectPluginHost: PluginHostView['select'] = (id, tab) => {
+    const state = pluginHosts.getSnapshot()
+    const target = state.connected.find(choice => choice.id === id)
+    if (id !== '' && target === undefined) return
+    if (state.selected?.id === target?.id) return
+    const scope = target === undefined ? ctx : pluginTargets.get(target.id)?.runtime.ctx
+    const navigation = scope?.get('hostPluginActions')
+    if (navigation === undefined) return
+    navigation.selectListTab(tab)
+    pluginTab = tab
+    pluginHosts.set({ enabled: state.enabled, connected: state.connected, ...target === undefined ? {} : { selected: target } })
+  }
+  const pluginHostView: PluginHostView = { projected: false, state: pluginHosts, select: selectPluginHost }
+  const projectedPluginHostView: PluginHostView = { ...pluginHostView, projected: true }
+  ctx.provide('pluginHostView', pluginHostView)
   const readSelection = () => selection.getSnapshot()
   const observeSelection = (listener: () => void) => selection.subscribe(listener)
   const observeVisibility = (listener: () => void) => {
@@ -221,13 +259,23 @@ export function provideHostRuntimeFactory(ctx: Context, modules: ClientModuleLoa
     const pane = target === undefined ? runtime.renderPane() : runtime.renderPane(target.session)
     return createElement('div', { 'data-shortcut-host': runtime.hostKey, style: { display: 'contents' } }, pane)
   }
+  function HostPluginPage({ id }: PropsRuntime<'plugins.host.page'>): ReactNode {
+    const target = pluginTargets.get(id)
+    if (target === undefined) return null
+    const page = target.runtime.ctx.slots.renderSlot('root', { hostMainPanel: 'plugins' }, { session: undefined })
+    return createElement(Fragment, { key: id }, page)
+  }
   ctx.inject(['slots'], (scope) => {
     scope.slots.inject('shell.host-pane', () => scope.slots.register({ name: 'shell.host-pane' }, HostPaneOutlet))
+    scope.slots.inject('plugins.host.page', () => scope.slots.register({ name: 'plugins.host.page' }, HostPluginPage))
   })
   ctx.provide('hostRuntimeFactory', {
     selectedHost,
     showPane,
     showLocal,
+    enablePluginHostSelection() {
+      pluginHosts.set({ ...pluginHosts.getSnapshot(), enabled: true })
+    },
     async create(options) {
       const { hostKey } = options
       if (active.has(hostKey)) throw new Error('host runtime: Host already open or opening')
@@ -235,16 +283,35 @@ export function provideHostRuntimeFactory(ctx: Context, modules: ClientModuleLoa
       let runtime: HostRuntime | undefined
       try {
         const release = ctx.effect(async () => {
-          const current = await openFromLocalModules(modules, options, foregroundOf(hostKey), () => { showPane(hostKey) }, ctx)
+          const current = await openFromLocalModules(
+            modules, options, foregroundOf(hostKey), () => { showPane(hostKey) }, ctx, projectedPluginHostView,
+          )
           runtime = current
           active.set(hostKey, current)
+          const label = options.label?.trim() || hostKey
+          const navigation = current.ctx.get('hostPluginActions')
+          const connection = current.ctx.get('connection') as ConnectionHandle
+          let unsubscribePluginHost: (() => void) | undefined
+          if (navigation !== undefined) {
+            const choice = { id: hostKey, label }
+            pluginTargets.set(hostKey, { choice, runtime: current, connection })
+            const state = pluginHosts.getSnapshot()
+            if (state.selected?.id === hostKey) {
+              navigation.selectListTab(pluginTab)
+              pluginHosts.set({ ...state, selected: choice })
+            }
+            unsubscribePluginHost = connection.state.subscribe(syncPluginHosts)
+            syncPluginHosts()
+          }
           projections.set([...projections.getSnapshot(), {
             key: hostKey,
-            label: options.label?.trim() || hostKey,
+            label,
             addWorkspace: () => { current.ctx.get('hostWorkspaceActions')?.addWorkspace() },
             render: owner => current.ctx.slots.renderSlot('root', { workspaceSidebar: owner }, { session: undefined }),
           }])
           return async () => {
+            unsubscribePluginHost?.()
+            if (pluginTargets.delete(hostKey)) syncPluginHosts()
             projections.set(projections.getSnapshot().filter(projection => projection.key !== hostKey))
             active.set(hostKey, undefined)
             if (selectedHost.getSnapshot() === hostKey) selection.set(undefined)

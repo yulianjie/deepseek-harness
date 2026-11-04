@@ -5,7 +5,8 @@ export function apply(ctx, {
   createProjectPane, installRemoteHostSettings, transport, baseUrl,
 }) {
   const panelId = 'remote-host-ssh'
-  const footer = 'sidebar.footer.action'
+  const panelList = 'sidebar.panellist'
+  const panelTitle = '远程连接'
   const factory = ctx.get('hostRuntimeFactory')
   if (!factory) throw new Error('当前 Desktop 不支持并行 SSH 会话。')
   const { createElement: h, useMemo, useState, useSyncExternalStore } = react
@@ -24,7 +25,8 @@ export function apply(ctx, {
     secondary: { color: 'var(--dsw-alias-label-secondary)', margin: 0 },
   }
   const idle = { getSnapshot: () => undefined, subscribe: () => () => {} }
-  const emptyHost = { alias: '', label: '', instance: 'default' }
+  const emptyHost = { alias: '', label: '', instance: 'default', authMode: 'config', identityFile: '' }
+  const authLabels = { config: 'OpenSSH 配置', key: '私钥文件', password: '密码' }
   const display = {
     connected: ['已连接', 'done'],
     connecting: ['正在连接', 'ongoing'],
@@ -95,14 +97,14 @@ export function apply(ctx, {
     }
   }
 
-  function connect(host) {
+  function connect(host, password) {
     if (entries.has(host.id)) return
     run(host.id, 'connecting', async () => {
       const status = host.status
       const expected = status?.hostId && status?.instanceId
         ? { hostId: status.hostId, instanceId: status.instanceId }
         : undefined
-      const channel = await openParallelHost({ ...local, id: host.id, expected })
+      const channel = await openParallelHost({ ...local, id: host.id, expected, password })
       const entry = { channel }
       try {
         entry.runtime = await factory.create({
@@ -138,13 +140,13 @@ export function apply(ctx, {
     })
   }
 
-  function reconnect(host) {
+  function reconnect(host, password) {
     const entry = entries.get(host.id)
-    if (!entry) return connect(host)
+    if (!entry) return connect(host, password)
     run(host.id, 'reconnecting', async () => {
       // Abort the old event consumers before publishing a new answer Peer.
       entry.connection.reconnect()
-      const { bootChanged } = await entry.channel.reconnect({ signal: lifetime.signal })
+      const { bootChanged } = await entry.channel.reconnect({ signal: lifetime.signal, password })
       lifetime.signal.throwIfAborted()
       // Its normal retry loop claims the new lease. A second forced reset
       // could close the replacement if the loop already opened its socket.
@@ -176,15 +178,32 @@ export function apply(ctx, {
       : 'offline' : 'disconnected')
     const [label, dot] = display[status]
     const notice = notices.get(host.id)
+    const authMode = host.authMode ?? 'config'
+    const needsConnection = !entry || !available
+    const blocked = Boolean(phase) || editing || removing
+    const connectLabel = entry ? '重新连接' : '连接'
+    const start = entry ? reconnect : connect
+    const passwordForm = authMode === 'password' && needsConnection && !editing && !removing
     return h('li', { style: style.row },
       h('div', { style: style.actions }, h('strong', null, host.label || host.alias),
         h(StateDot, { state: dot }), h('span', null, label),
         entry?.runtime.hostKey === selected && entry && h('span', { style: style.secondary }, '当前会话 Host')),
-      h('p', { style: style.secondary }, [host.alias, host.instance, entry?.channel.version].filter(Boolean).join(' · ')),
+      h('p', { style: style.secondary }, [host.alias, host.instance, authLabels[authMode], entry?.channel.version].filter(Boolean).join(' · ')),
       notice && h('p', { role: notice.error ? 'alert' : 'status' }, notice.message),
       h('div', { style: style.actions },
-        !entry && h(Button, { variant: 'primary', size: 'sm', disabled: Boolean(phase) || editing || removing, onClick: () => connect(host) }, '连接'),
-        entry && !available && h(Button, { variant: 'primary', size: 'sm', disabled: Boolean(phase), onClick: () => reconnect(host) }, '重新连接'),
+        passwordForm && h('form', { style: style.actions, autoComplete: 'off', onSubmit(event) {
+          event.preventDefault()
+          const form = event.currentTarget
+          const password = new FormData(form).get('ssh-password')
+          form.reset()
+          if (!blocked && password) start(host, password)
+        } },
+        h(Input, { type: 'password', name: 'ssh-password', 'aria-label': 'SSH 登录密码', placeholder: 'SSH 登录密码',
+          autoComplete: 'off', required: true, maxLength: 1023, disabled: blocked }),
+        h(Button, { variant: 'primary', size: 'sm', type: 'submit', disabled: blocked }, connectLabel)),
+        authMode !== 'password' && needsConnection && h(Button, {
+          variant: 'primary', size: 'sm', disabled: blocked, onClick: () => start(host),
+        }, connectLabel),
         entry && h(Button, { variant: 'outline', size: 'sm', disabled: Boolean(phase), onClick: () => disconnect(host) }, '断开连接'),
         !entry && h(Button, { size: 'sm', disabled: busy || Boolean(phase), onClick: edit }, '编辑'),
         !entry && h(Button, { size: 'sm', disabled: busy || Boolean(phase),
@@ -221,10 +240,10 @@ export function apply(ctx, {
       h(Input, { ...options, disabled: busy, value: draft[name],
         onChange: event => setDraft({ ...draft, [name]: event.target.value }),
       }))
-    return h('section', { style: style.panel, 'aria-label': '远程连接', 'data-dsh-ssh-parallel-manager': true },
+    return h('section', { style: style.panel, 'aria-label': panelTitle, 'data-dsh-ssh-parallel-manager': true },
       h('div', { style: style.content },
         h('header', { style: style.actions },
-          h('h2', { style: { margin: 0, marginRight: 'auto' } }, '远程连接'),
+          h('h2', { style: { margin: 0, marginRight: 'auto' } }, panelTitle),
           h(Button, { variant: 'ghost', onClick: () => layout.selectPanel(null) }, '返回会话')),
         h('div', { style: style.actions },
           h(Button, { variant: 'outline', disabled: busy, onClick: () => setDraft(emptyHost) }, '添加主机'),
@@ -236,12 +255,25 @@ export function apply(ctx, {
           }, alias)) : '没有发现 SSH 别名。'),
         draft && h('form', { style: style.row, onSubmit(event) {
           event.preventDefault()
-          void configure('save', { ...draft, alias: draft.alias.trim(), label: draft.label.trim() || undefined, instance: draft.instance.trim() },
-            () => setDraft(null))
+          const { id, alias, label, instance, authMode, identityFile } = draft
+          void configure('save', {
+            id, alias: alias.trim(), label: label.trim() || undefined, instance: instance.trim(), authMode,
+            identityFile: authMode === 'key' ? identityFile : undefined,
+          }, () => setDraft(null))
         } },
         field('alias', 'SSH 别名或地址', { required: true, maxLength: 255 }),
         field('label', '显示名称', { maxLength: 100 }),
         field('instance', '远程实例', { required: true, maxLength: 64 }),
+        h('fieldset', { style: { border: 0, padding: 0, margin: 0, minWidth: 0 }, disabled: busy },
+          h('legend', null, '身份验证方式'),
+          h('div', { style: style.actions }, Object.entries(authLabels).map(([value, label]) =>
+            h('label', { key: value }, h('input', { type: 'radio', name: 'authMode', value,
+              checked: draft.authMode === value, onChange: () => setDraft({ ...draft, authMode: value }),
+            }), label)))),
+        draft.authMode === 'key' && field('identityFile', '本机私钥路径', {
+          required: true, maxLength: 2048, placeholder: '~/.ssh/id_ed25519',
+        }),
+        draft.authMode === 'password' && h('p', { style: style.secondary }, '连接和重连时输入密码。'),
         h('div', { style: style.actions },
           h(Button, { variant: 'primary', type: 'submit', disabled: busy }, '保存主机'),
           h(Button, { disabled: busy, onClick: () => setDraft(null) }, '取消'))),
@@ -250,18 +282,15 @@ export function apply(ctx, {
         hosts.length ? h('ul', { 'aria-label': 'SSH 主机', style: { padding: 0, margin: 0, listStyle: 'none', display: 'grid', gap: 8 } },
           ...hosts.map(host => h(HostRow, { key: host.id, host, busy, editing: draft?.id === host.id,
             removing: removeId === host.id,
-            edit: () => setDraft({ id: host.id, alias: host.alias, label: host.label || '', instance: host.instance || 'default' }),
+            edit: () => setDraft({ id: host.id, alias: host.alias, label: host.label || '', instance: host.instance || 'default',
+              authMode: host.authMode ?? 'config', identityFile: host.identityFile ?? '' }),
             confirmRemove: () => setRemoveId(removeId === host.id ? undefined : host.id),
             remove: () => configure('remove', { id: host.id }, () => setRemoveId(undefined)),
           }))) : !loading && !error && h('p', { style: style.secondary }, '尚未配置 SSH 主机。')))
   }
 
-  function ManagementButton({ wide }) {
-    return h(Button, {
-      'aria-label': '远程连接', title: '远程连接', variant: 'ghost', size: 'sm',
-      icon: h(IconLinkOutlineRegular, { size: 16 }),
-      onClick: () => { layout.selectPanel(panelId); void refresh() },
-    }, wide ? '远程连接' : undefined)
+  function ManagementIcon({ size }) {
+    return h(IconLinkOutlineRegular, { size })
   }
 
   ctx.effect(() => () => {
@@ -274,5 +303,18 @@ export function apply(ctx, {
     })
   }, 'remote-ssh: parallel host management')
   slots.inject('main', () => slots.register({ name: 'main', key: panelId }, HostPanel))
-  slots.inject(footer, () => slots.register({ name: footer, id: 'dsh-remote-host-ssh.parallel', order: 10 }, ManagementButton))
+  slots.inject(panelList, () => slots.register({ name: panelList, id: panelId, order: 1, label: panelTitle }, ManagementIcon))
+  ctx.effect(() => {
+    const { panelInfo } = layout
+    let previous
+    function panelChanged() {
+      const { activePanelId } = panelInfo.getSnapshot()
+      if (activePanelId === previous) return
+      previous = activePanelId
+      if (activePanelId === panelId) void refresh()
+    }
+    const unsubscribe = panelInfo.subscribe(panelChanged)
+    panelChanged()
+    return unsubscribe
+  }, 'remote-ssh: refresh hosts when opening manager')
 }

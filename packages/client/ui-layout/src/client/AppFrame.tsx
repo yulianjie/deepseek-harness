@@ -42,10 +42,21 @@ export function HostAwareAppFrame(props: AppFrameProps & InjectFace<{ hooks: { h
   return <AppFrame {...props} showHostPane={showHostPane} />
 }
 
-/** Select the Host's conversation frame or its workspace projection. */
+/**
+ * Select the Host's conversation frame, workspace list, or requested main panel.
+ * @param props - root view request and the Host's slot and store faces.
+ * @returns content from this Host's own registry.
+ */
 export function HostPaneRoot(props: AppFrameProps & PropsRenderSlots<'sidebar.workspaces'>) {
   const owner = props.workspaceSidebar
-  return owner === undefined ? <AppFrame {...props} /> : props.renderSlot('sidebar.workspaces', owner)
+  if (owner !== undefined) return props.renderSlot('sidebar.workspaces', owner)
+  if (props.hostMainPanel !== undefined) {
+    return <>
+      {props.renderSlot('main', {}, { entryKey: props.hostMainPanel })}
+      <div className={css.overlayLayer} data-shell-overlay>{props.renderSlot('shell.overlay', {})}</div>
+    </>
+  }
+  return <AppFrame {...props} />
 }
 
 /** Center column grid item (session-body building block). */

@@ -135,6 +135,13 @@ export function createElectronBuilderConfig(
         '-OutputDirectory', join(buildPaths.root, 'installer-ui')], {
         env: scrubWindowsSigningEnvironment(env), windowsHide: true,
       })
+      if (remoteSsh) {
+        await promisify(execFile)('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+          fileURLToPath(new URL('./prepare-windows-ssh-askpass.ps1', import.meta.url)),
+          '-OutputDirectory', join(buildPaths.root, 'ssh-askpass')], {
+          env: scrubWindowsSigningEnvironment(env), windowsHide: true,
+        })
+      }
       if (windowsSigner !== undefined) {
         await windowsSigner({ path: join(buildPaths.root, 'installer-ui', 'window-frame.dll'), hash: 'sha256', isNest: false })
       }
@@ -161,7 +168,10 @@ export function createElectronBuilderConfig(
     extraResources: [
       { from: buildPaths.runtime, to: 'runtime' },
       ...(remoteSsh ? [{ from: fileURLToPath(new URL('../remote-ssh', import.meta.url)), to: 'remote-ssh',
-        filter: ['**/*', '!tests/**/*', '!README.md'] }] : []),
+        filter: ['**/*', '!tests/**/*', '!README.md', '!**/askpass-windows.c'] }] : []),
+      ...(remoteSsh && packagesWindows ? [{
+        from: join(buildPaths.root, 'ssh-askpass', 'askpass.exe'), to: 'remote-ssh/host/connection/askpass.exe',
+      }] : []),
       { from: fileURLToPath(new URL('../resources/icon-windows.png', import.meta.url)), to: 'icon.png' },
       // Windows tray bitmaps; macOS keeps the Dock and ships no menu bar icon.
       ...(packagesWindows ? [{ from: fileURLToPath(new URL('../resources/tray-windows.ico', import.meta.url)), to: 'tray.ico' }] : []),

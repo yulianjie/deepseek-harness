@@ -23,7 +23,7 @@ export interface DesktopElectronBuilderConfig {
   readonly asarUnpack: readonly string[]
   readonly extraResources: readonly [
     { readonly from: string, readonly to: 'runtime' },
-    ...{ readonly from: string, readonly to: 'remote-ssh' | 'icon.png' | 'tray.ico' }[],
+    ...{ readonly from: string, readonly to: 'remote-ssh' | 'remote-ssh/host/connection/askpass.exe' | 'icon.png' | 'tray.ico' }[],
   ]
   readonly mac: {
     readonly extendInfo: { readonly NSMicrophoneUsageDescription: string }

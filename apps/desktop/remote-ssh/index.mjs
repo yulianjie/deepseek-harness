@@ -20,6 +20,8 @@ export function apply(ctx, config = {}) {
       signal: options.signal,
       onStderr: options.onStderr,
       timeout: options.timeoutMs,
+      identityFile: host.identityFile,
+      authentication: options.authentication,
     }),
   })
   const manager = new ConnectionManager({ stateDir, ssh, deploy: runtime.deploy })

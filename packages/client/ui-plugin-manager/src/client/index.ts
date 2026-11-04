@@ -20,7 +20,8 @@ import type {} from '@deepseek-ai/dsh-api-remotes/client'
 // Type-only: the forwarded events' own declaration (`$on`'s key face resolves
 // through the owning package's client-safe types subpath).
 import type {} from '@deepseek-ai/dsh-plugin-manager/types'
-import { PluginManagerPage } from './PluginManagerPage.tsx'
+import { PluginManagerPanel } from './PluginManagerPage.tsx'
+import { DiscoverPluginHostSelector, type PluginHostFace } from './PluginHostSelector.tsx'
 import { PluginRefreshToast, type PluginRefreshToastFace } from './PluginRefreshToast.tsx'
 import { PluginsPanelIcon } from './PluginsPanelIcon.tsx'
 import { configLedgerSource } from './config-ledger.ts'
@@ -28,6 +29,7 @@ import { tabLedgerSource } from './tab-ledger.ts'
 import { PluginManagerController } from './manager-store.ts'
 import { en, zh, type PluginManagerLocaleKey } from './locales.ts'
 import { createNavigationStore } from './navigation-store.ts'
+import type { PluginHostState } from '@deepseek-ai/dsh-client-ui-slots'
 import type {} from './slot-contract.ts'
 
 declare module '@deepseek-ai/cordis' {
@@ -71,6 +73,8 @@ export const PANEL_ID = 'plugins' as MainPanelId
 /** Services required by the sidebar registration and the Remote methods; the inventory says whether the Host manages a profile. */
 export const inject = ['slots', 'locale', 'remote', 'remote.pluginManager', 'remote.pluginInventory', 'remote.pluginRegistryProbe', 'configForms', 'layout']
 
+const noHostSelection: PluginHostState = { enabled: false, connected: [] }
+
 /**
  * Contribute the Plugins entry to the sidebar with the management page it
  * opens, and keep it current on the Host's change events.
@@ -103,6 +107,17 @@ export function apply(ctx: ClientContext): void {
   // page declares here, so the page never names a configurable plugin.
   const configLedger = configLedgerSource(ctx)
   const face = controller.inject(configLedger, tabLedgerSource(ctx), text => ctx.locale.resolveText(text))
+  const hostView = ctx.get('pluginHostView')
+  const hostFace: PluginHostFace = {
+    projectedHost: hostView?.projected ?? false,
+    selectPluginHost: (id, tab) => { hostView?.select(id, tab) },
+    hooks: {
+      pluginHosts: hostView?.state ?? { getSnapshot: () => noHostSelection, subscribe: () => () => {} },
+    },
+  }
+  ctx.slots.inject('plugins.discover.host', () => ctx.slots.register({
+    name: 'plugins.discover.host', locale: NS, inject: () => hostFace,
+  }, DiscoverPluginHostSelector))
   ctx.slots.inject('shell.overlay', () => ctx.slots.register({
     name: 'shell.overlay', id: 'plugin-manager.refresh-toast', locale: NS,
     inject: (): PluginRefreshToastFace => ({
@@ -118,8 +133,9 @@ export function apply(ctx: ClientContext): void {
       key: PANEL_ID,
       locale: NS,
       store,
-      inject: () => face,
+      inject: () => ({ ...face, ...hostFace, hooks: { ...face.hooks, ...hostFace.hooks } }),
       children: {
+        'plugins.host.page': { kind: 'single', scope: 'root' },
         'plugins.add.actions': { kind: 'list', scope: 'root' },
         'plugins.tab': { kind: 'list', scope: 'root' },
         'plugins.item': { kind: 'list', scope: 'root' },
@@ -130,17 +146,31 @@ export function apply(ctx: ClientContext): void {
         'plugins.detail.badge': { kind: 'list', scope: 'root' },
         'plugins.detail.section': { kind: 'list', scope: 'root' },
       },
-    }, PluginManagerPage)
+    }, PluginManagerPanel)
     yield ctx.layout.panelInfo.subscribe(() => {
       if (ctx.layout.panelInfo.getSnapshot().activePanelId !== PANEL_ID) instance.actions.setView({ kind: 'list' })
     })
+    const selectListTab = (tab: string): void => {
+      instance.actions.setTab(tab)
+      instance.actions.setView({ kind: 'list' })
+    }
+    const focusOwnHost = (): void => {
+      if (hostView !== undefined && !hostView.projected && hostView.state.getSnapshot().selected !== undefined) {
+        hostView.select('', 'installed')
+      }
+    }
+    if (hostView !== undefined) {
+      const disposeHostActions = ctx.reflect.provide('hostPluginActions', { selectListTab })
+      yield () => { void disposeHostActions() }
+    }
     const disposeNavigation = ctx.reflect.provide('pluginNavigation', {
       openList: () => {
+        focusOwnHost()
         ctx.layout.selectPanel(PANEL_ID)
-        instance.actions.setTab('installed')
-        instance.actions.setView({ kind: 'list' })
+        selectListTab('installed')
       },
       openBundle: (packageName: string) => {
+        focusOwnHost()
         ctx.layout.selectPanel(PANEL_ID)
         instance.actions.setTab('installed')
         instance.actions.setView({ kind: 'package', name: packageName })

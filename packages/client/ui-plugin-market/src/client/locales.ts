@@ -79,7 +79,7 @@ export const zh = {
   versionExempted: '已豁免',
   versionPrerelease: '预发布',
   confirmTitle: '安装「{name}」？',
-  installTrust: '插件在本机以你的权限运行。请确认你信任它的来源',
+  installTrust: '插件在所选主机上以你的权限运行。请确认你信任它的来源',
 } as const
 
 /** Dictionary keys owned by this plugin. */
@@ -164,5 +164,5 @@ export const en = {
   versionExempted: 'Exempted',
   versionPrerelease: 'Prerelease',
   confirmTitle: 'Install "{name}"?',
-  installTrust: 'Plugins run on this machine with your permissions. Make sure you trust where this one comes from.',
+  installTrust: 'Plugins run on the selected Host with your permissions. Make sure you trust where this one comes from.',
 } satisfies Record<PluginMarketLocaleKey, string>

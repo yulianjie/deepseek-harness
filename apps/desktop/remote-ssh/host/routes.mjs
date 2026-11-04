@@ -6,7 +6,7 @@ const responseHeaders = {
   'Cache-Control': 'no-store',
   'X-Content-Type-Options': 'nosniff',
 }
-const maxBodyBytes = 4096
+const maxBodyBytes = 8192
 
 class RequestError extends Error {
   constructor(status, message) {
@@ -35,8 +35,8 @@ function displayStatus(status = {}) {
   }
 }
 
-function displayHost({ id, alias, label, instance }, manager) {
-  return { id, alias, label, instance, status: displayStatus(manager.status(id)) }
+function displayHost({ id, alias, label, instance, authMode, identityFile }, manager) {
+  return { id, alias, label, instance, authMode, identityFile, status: displayStatus(manager.status(id)) }
 }
 
 async function jsonObject(request) {
@@ -60,15 +60,16 @@ async function jsonObject(request) {
       buffer.set(value, size)
       size += value.byteLength
     }
+    try {
+      const data = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(buffer.subarray(0, size)))
+      if (data && typeof data === 'object' && !Array.isArray(data)) return data
+    } catch (error) {
+      // Return the same client error for malformed text and non-object JSON.
+    }
   } finally {
+    buffer.fill(0)
     // The DSH carrier closes an unread streaming request after writing the response.
     reader.releaseLock()
-  }
-  try {
-    const data = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(buffer.subarray(0, size)))
-    if (data && typeof data === 'object' && !Array.isArray(data)) return data
-  } catch {
-    // Return the same client error for malformed text and non-object JSON.
   }
   throw new RequestError(400, '请求内容无效。')
 }
@@ -80,7 +81,7 @@ function hostId(value) {
   return value
 }
 
-function hostConfig({ id, alias, label, instance }) {
+function hostConfig({ id, alias, label, instance, authMode, identityFile }) {
   if (typeof alias !== 'string' || alias.length > 255 || !alias.trim()) {
     throw new RequestError(400, '请填写有效的 SSH 别名。')
   }
@@ -90,7 +91,7 @@ function hostConfig({ id, alias, label, instance }) {
   if (instance !== undefined && (typeof instance !== 'string' || instance.length > 64)) {
     throw new RequestError(400, '实例名称最多 64 个字符。')
   }
-  return { id: id === undefined ? undefined : hostId(id), alias, label, instance }
+  return { id: id === undefined ? undefined : hostId(id), alias, label, instance, authMode, identityFile }
 }
 
 /**
@@ -131,11 +132,11 @@ export function registerSshRoutes(ctx, manager, broker) {
     return { ok: true }
   })
   installParallelCarrier(ctx, broker)
-  register('/parallel/open', 'POST', ({ id, expected }, signal) => {
+  register('/parallel/open', 'POST', ({ id, expected, password }, signal) => {
     if (expected !== undefined && (!isHostIdentity(expected) || Object.keys(expected).length !== 2)) {
       throw new RequestError(400, 'Harness 实例身份无效。')
     }
-    return broker.open(hostId(id), expected, signal)
+    return broker.open(hostId(id), expected, signal, { password })
   })
   register('/parallel/close', 'POST', async ({ capability }) => {
     await broker.close(capability)

@@ -3,6 +3,7 @@ import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { Context, type Plugin } from '@deepseek-ai/cordis'
 import type {} from '@deepseek-ai/dsh-api-session-controller/client'
+import type { BundleInfo } from '@deepseek-ai/dsh-api-remotes/client'
 import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
 import { installConnection } from '@deepseek-ai/dsh-client-connection/client'
 import { brandString } from '@deepseek-ai/dsh-brand'
@@ -19,6 +20,7 @@ import { remoteNamespacesOf, remoteProxiesPlugin } from '@deepseek-ai/dsh-client
 import { graphFromRoster } from '@deepseek-ai/dsh-client-test-runtime/src/assembly/roster.ts'
 import * as layout from '@deepseek-ai/dsh-client-ui-layout/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
+import { ok } from '@deepseek-ai/dsh-remote-mock'
 import { SessionId } from '@deepseek-ai/dsh-session/types'
 import { act, cleanup, fireEvent, render, waitFor, within } from '@testing-library/react'
 import { createElement, type ReactNode } from 'react'
@@ -268,6 +270,109 @@ it('opens the native conversation with the factory’s curated local client modu
   expect(mock.log.streams('$events').some(stream => stream.state === 'open')).toBe(false)
 }, 60_000)
 
+it('searches and manages plugins on the selected Host and keeps a disconnected selection', async () => {
+  vi.stubGlobal('__DSH_REMOTE_ACCESS__', { type: 'baseline', owner: true })
+  const bundle = (name: string): BundleInfo => ({
+    name, version: '1.0.0', official: false, availability: 'profile', installed: true,
+    optional: false, enabled: true, removable: true, rows: [], overrides: [],
+  })
+  const fixture = (bundles: BundleInfo[]) => {
+    const { mock } = createAssembledRemote()
+    mock.unary('pluginInventory/list', ok({ entries: [], managementAvailable: true }))
+    mock.unary('pluginManager/listBundles', () => ok(bundles.slice()))
+    mock.unary('pluginManager/listPlugins', ok([]))
+    mock.unary('pluginManager/registries', ok({ registry: null, fallbackRegistries: [], resolved: null }))
+    mock.unary('pluginManager/inspect', ({ spec }: { spec: string }) =>
+      ok({ status: 'accepted', kind: 'registry', name: spec, version: '1.0.0', bundle: true, registry: null }))
+    mock.unary('pluginManager/installBundle', ({ spec }: { spec: string }) => {
+      const name = spec.split('@')[0]!
+      bundles.push({ ...bundle(name), version: spec === name ? '1.0.0' : '2.0.0' })
+      return ok({ changed: true, stage: 'install', application: 'applied', target: spec, bundle: name })
+    })
+    mock.unary('pluginManager/removeBundle', ({ name }: { name: string }) => {
+      const index = bundles.findIndex(item => item.name === name)
+      if (index < 0) throw new Error(`Missing bundle ${name}`)
+      bundles.splice(index, 1)
+      return ok({ changed: true, stage: 'remove', application: 'applied', target: name })
+    })
+    return mock
+  }
+  const local = fixture([bundle('local-fixture-plugin')])
+  const remote = fixture([{
+    ...bundle('remote-fixture-plugin'), installTarget: { spec: 'remote-fixture-plugin@2.0.0', version: '2.0.0' },
+  }, bundle('remote-extra-plugin')])
+  const roster = webApp.without(['@deepseek-ai/dsh-client-hmr'])
+  const localConnection = {
+    installConnection,
+    apply(scope: Context) {
+      installConnection(scope, { interactions: 'answer', transport: { rpc: local.rpc } })
+    },
+  }
+  const modules = createInProcessModules(graphFromRoster(roster.rows), await loadPluginModules({
+    roster,
+    provide: { [connectionPackage]: localConnection },
+  }))
+  const ctx = new Context()
+  onTestFinished(() => ctx.fiber.dispose())
+  ctx.provide('hostStorage', createMemoryHostStorage())
+  provideHostRuntimeFactory(ctx, modules)
+  await bootClient({ ctx, modules, manifest: modules.manifest })
+  const factory = ctx.hostRuntimeFactory
+  factory.enablePluginHostSelection()
+  const hostKey = brandString<HostKey>('fixture:plugin-host')
+  const runtime = await factory.create({
+    hostKey, label: 'SSH Plugin Host',
+    connection: { transport: { rpc: remote.rpc } },
+    pageAccess: { fetch: () => Promise.resolve(new Response(null, { status: 404 })), resourceUrl: input => String(input) },
+  })
+  const view = render(pane(ctx.slots.renderSlot('root', {})))
+  fireEvent.click(await view.findByRole('button', { name: 'Plugins' }))
+  expect(await view.findByRole('button', { name: 'View local-fixture-plugin' })).toBeTruthy()
+  fireEvent.click(view.getByRole('button', { name: 'Host: Local' }))
+  fireEvent.click(await view.findByRole('menuitem', { name: 'SSH Plugin Host' }))
+  expect(await view.findByRole('button', { name: 'View remote-fixture-plugin' })).toBeTruthy()
+  expect(view.queryByRole('button', { name: 'View local-fixture-plugin' })).toBeNull()
+  expect(factory.selectedHost.getSnapshot()).toBeUndefined()
+  fireEvent.change(view.getByRole('searchbox', { name: 'Search plugins' }), { target: { value: 'fixture' } })
+  expect(view.queryByRole('button', { name: 'View remote-extra-plugin' })).toBeNull()
+
+  fireEvent.click(view.getByRole('button', { name: 'View remote-fixture-plugin' }))
+  fireEvent.click(view.getByRole('button', { name: 'Update remote-fixture-plugin' }))
+  await waitFor(() => {
+    expect(remote.log.calls('pluginManager/installBundle')).toMatchObject([{ args: [{ spec: 'remote-fixture-plugin@2.0.0' }] }])
+    expect(remote.log.calls('pluginManager/removeBundle')).toHaveLength(1)
+  })
+  fireEvent.click(await view.findByRole('button', { name: 'Close' }))
+  const uninstall = await view.findByRole('button', { name: 'Uninstall remote-fixture-plugin' })
+  await waitFor(() => { expect(uninstall).toHaveProperty('disabled', false) })
+  fireEvent.click(uninstall)
+  const confirmation = await view.findByRole('dialog', { name: 'Uninstall "remote-fixture-plugin"?' })
+  fireEvent.click(within(confirmation).getByRole('button', { name: 'Uninstall' }))
+  await waitFor(() => { expect(remote.log.calls('pluginManager/removeBundle')).toHaveLength(2) })
+  expect(await view.findByText('No plugins match your search.')).toBeTruthy()
+
+  fireEvent.click(view.getByRole('button', { name: 'Add plugin' }))
+  const install = within(await view.findByRole('dialog', { name: 'Add plugin' }))
+  expect(install.getByText(/They run on SSH Plugin Host with your permissions/)).toBeTruthy()
+  fireEvent.change(install.getByLabelText('Package name or address'), { target: { value: 'remote-added-plugin' } })
+  fireEvent.click(install.getByRole('button', { name: 'Install' }))
+  await waitFor(() => {
+    expect(remote.log.calls('pluginManager/inspect')).toHaveLength(1)
+    expect(remote.log.calls('pluginManager/installBundle')).toHaveLength(2)
+  })
+  expect(local.log.calls('pluginManager/inspect')).toHaveLength(0)
+  expect(local.log.calls('pluginManager/installBundle')).toHaveLength(0)
+  expect(local.log.calls('pluginManager/removeBundle')).toHaveLength(0)
+
+  await act(async () => { await runtime.dispose() })
+  expect(await view.findByText('SSH Plugin Host is disconnected. Reconnect it or select another Host.')).toBeTruthy()
+  expect(view.queryByRole('button', { name: 'Add plugin' })).toBeNull()
+  fireEvent.click(view.getByRole('button', { name: 'Host: SSH Plugin Host' }))
+  expect(view.queryByRole('menuitem', { name: 'SSH Plugin Host' })).toBeNull()
+  fireEvent.click(view.getByRole('menuitem', { name: 'Local' }))
+  expect(await view.findByRole('button', { name: 'View local-fixture-plugin' })).toBeTruthy()
+}, 60_000)
+
 it('mounts the bundled SSH manager only in the local Desktop shell', async () => {
   const entry = pathToFileURL(resolve('apps/desktop/remote-ssh/index.mjs')).href
   const { apply } = await import(/* @vite-ignore */ entry)
@@ -308,13 +413,31 @@ it('mounts the bundled SSH manager only in the local Desktop shell', async () =>
   provideHostRuntimeFactory(ctx, modules)
   await bootClient({ ctx, modules, manifest: modules.manifest })
   const staticModules = getStaticModules()
-  const fetch = vi.fn(async (input: RequestInfo | URL) => {
-    expect(String(input)).toBe('dsh-app://app/api/remote-ssh/hosts')
-    return Response.json({ hosts: [{ id: 'fixture', label: 'Fixture SSH host', alias: 'fixture', instance: 'default' }] })
+  const hostRecord = { id: 'fixture', label: 'Fixture SSH host', alias: 'fixture', instance: 'default' }
+  let saved: typeof hostRecord & { authMode?: string; identityFile?: string } = hostRecord
+  const saves: unknown[] = []
+  const opens: unknown[] = []
+  const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const { pathname } = new URL(String(input))
+    switch (pathname) {
+      case '/api/remote-ssh/hosts':
+        return Response.json({ hosts: [saved] })
+      case '/api/remote-ssh/hosts/save':
+        expect(init?.method).toBe('POST')
+        saved = JSON.parse(String(init?.body))
+        saves.push(saved)
+        return Response.json({ host: saved })
+      case '/api/remote-ssh/parallel/open':
+        expect(init?.method).toBe('POST')
+        opens.push(JSON.parse(String(init?.body)))
+        return Response.json({ code: 'SSH_AUTH_FAILED', error: 'SSH 登录失败。' }, { status: 403 })
+      default:
+        throw new Error(`Unexpected SSH request ${pathname}`)
+    }
   })
   const win = {
     ...provider, dshDesktop: { protocolVersion: 1 }, document: { baseURI: 'dsh-app://app/' },
-    __DSH_TRANSPORT__: { fetch },
+    __DSH_TRANSPORT__: { fetch, streamBaseUrl: 'http://127.0.0.1:8400/' },
   }
   await installDesktopSsh(ctx, staticModules, { ...win, location: { protocol: 'https:', hostname: 'app' } })
   expect(ctx.slots.entries('main').every(row => row.options.key !== 'remote-host-ssh')).toBe(true)
@@ -323,10 +446,44 @@ it('mounts the bundled SSH manager only in the local Desktop shell', async () =>
   onTestFinished(() => { container.remove() })
   await act(async () => { await mountClient(ctx, container) })
   const shell = within(container)
-  fireEvent.click(await shell.findByRole('button', { name: '远程连接' }))
+  const launcher = await shell.findByRole('button', { name: '远程连接' })
+  const nav = launcher.closest('nav')
+  if (nav === null) throw new Error('The Remote SSH launcher is outside the sidebar panel list')
+  const panelButtons = within(nav).getAllByRole('button')
+  const plugins = within(nav).getByRole('button', { name: /^(Plugins|插件)$/ })
+  expect(panelButtons[panelButtons.indexOf(plugins) + 1]).toBe(launcher)
+  expect(fetch).not.toHaveBeenCalled()
+  fireEvent.click(launcher)
   const manager = await shell.findByRole('region', { name: '远程连接' })
-  expect(await within(manager).findByText('Fixture SSH host')).toBeTruthy()
+  const panel = within(manager)
+  expect(await panel.findByText('Fixture SSH host')).toBeTruthy()
+  expect(launcher.getAttribute('aria-current')).toBe('page')
   expect(fetch).toHaveBeenCalledTimes(1)
+
+  fireEvent.click(panel.getByRole('button', { name: '编辑' }))
+  expect(panel.getByRole('radio', { name: 'OpenSSH 配置' })).toHaveProperty('checked', true)
+  fireEvent.click(panel.getByRole('radio', { name: '私钥文件' }))
+  const path = '~/.ssh/fixture private key'
+  fireEvent.change(panel.getByLabelText('本机私钥路径'), { target: { value: path } })
+  fireEvent.click(panel.getByRole('button', { name: '保存主机' }))
+  await waitFor(() => { expect(saves).toEqual([{ ...hostRecord, authMode: 'key', identityFile: path }]) })
+  await waitFor(() => { expect(panel.getByRole('button', { name: '编辑' })).toHaveProperty('disabled', false) })
+
+  fireEvent.click(panel.getByRole('button', { name: '编辑' }))
+  expect(panel.getByLabelText('本机私钥路径')).toHaveProperty('value', path)
+  fireEvent.click(panel.getByRole('radio', { name: '密码' }))
+  expect(panel.queryByLabelText('本机私钥路径')).toBeNull()
+  fireEvent.click(panel.getByRole('button', { name: '保存主机' }))
+  const input = await panel.findByLabelText('SSH 登录密码')
+  expect(saves[1]).toEqual({ ...hostRecord, authMode: 'password' })
+  expect(input).toHaveProperty('type', 'password')
+  expect(input).toHaveProperty('value', '')
+  const password = '  fixture password  '
+  fireEvent.change(input, { target: { value: password } })
+  fireEvent.click(panel.getByRole('button', { name: '连接' }))
+  expect(input).toHaveProperty('value', '')
+  expect((await panel.findByRole('alert')).textContent).toBe('SSH 登录失败。')
+  expect(opens).toEqual([{ id: hostRecord.id, password }])
 }, 60_000)
 
 it('routes unified rows, background interactions and New Session commands to the owning Host', async () => {

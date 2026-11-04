@@ -61,9 +61,11 @@ The installed app can run alongside the official Desktop. Its browser data and s
 
 For local packaging, set `DSH_DESKTOP_REMOTE_SSH=1` when running the package command for your platform. This selects the unsigned fork and ignores official release settings.
 
-1. Confirm that `ssh <alias>` works from your terminal. Use your usual OpenSSH configuration and keys or agent.
-2. In the Desktop sidebar, open **远程连接** (Remote connections), add the alias or choose it from **发现 SSH 别名** (Discover SSH aliases), and select **连接** (Connect). The first connection can install and start the pinned Harness runtime in your remote Linux account. Use Node.js 24 in the remote login shell. The installer uses the executable that shell resolves and reports an error if it is incompatible.
+1. Verify the server's host key in OpenSSH before connecting from Desktop. If prompted by `ssh <alias>`, confirm the fingerprint before adding it to `known_hosts`.
+2. Open **远程连接** (Remote connections) below **Plugins**, add a host or select an SSH alias, then choose OpenSSH configuration, a local private key file, or a password. For a key, enter an absolute path or a `~/` path and unlock passphrase-protected keys through your local SSH agent. Passwords are entered on each connection or reconnection and are not saved. The server must support SSH password authentication. The first connection can install the pinned Harness runtime on Linux using the remote login shell's Node.js. Node.js 24 is recommended.
 3. In **Add workspace**, select the SSH host and browse to the remote project. Local and SSH projects share the sidebar; select a session to switch without reloading. Configure a model on the remote host if it does not have one. Remote commands, files, Git changes, attachments and session history belong to that host.
+
+In **Plugins**, choose **Local** or a connected SSH host from the **Host** menu next to search. The selected host owns the plugin list and every installation, update, and removal. If it disconnects, the page keeps that host selected and pauses plugin actions until you reconnect or switch hosts.
 
 If SSH disconnects, reconnect from **远程连接**. The remote session does not fall back to your local machine and unfinished requests are not automatically replayed. Closing the Desktop connection leaves the remote Harness running.
 

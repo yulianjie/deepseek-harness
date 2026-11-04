@@ -91,6 +91,7 @@ function renderTab(state: Partial<DiscoverState> = {}, dictionary: Record<Plugin
   const openPackage = vi.fn()
   const props = {
     t: translator(dictionary), install, openPackage, ...actions,
+    renderSlot: () => null,
     resolveText: (text: string | Record<string, string>) => typeof text === 'string' ? text : text[language] ?? text.en,
     useDiscover: bindSnapshotSelector(store),
     useLocale: bindSnapshotSelector(locale),

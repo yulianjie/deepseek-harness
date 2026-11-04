@@ -11,7 +11,7 @@ import { resolveSlotLabel } from '@deepseek-ai/dsh-client-ui-slots'
 import { allowAllAccess, TestRemote, usePinnedBrowserLanguages } from '@deepseek-ai/dsh-client-test-runtime'
 import * as settings from '@deepseek-ai/dsh-client-ui-settings/client'
 import { apply, inject, NS, PANEL_ID } from '../src/client/index.ts'
-import { PluginManagerPage } from '../src/client/PluginManagerPage.tsx'
+import { PluginManagerPanel } from '../src/client/PluginManagerPage.tsx'
 import { PluginRefreshToast, type PluginRefreshToastFace } from '../src/client/PluginRefreshToast.tsx'
 import { PluginsPanelIcon } from '../src/client/PluginsPanelIcon.tsx'
 import type { PluginManagerFace } from '../src/client/manager-store.ts'
@@ -165,7 +165,7 @@ describe('ui-plugin-manager browser plugin', () => {
     const entry = b.slots.entries('main')[0]!
     assert(entry.store && 'create' in entry.store)
     expect(entry.store.create().getSnapshot()).toEqual({ tab: 'installed', view: { kind: 'package', name: 'dsh-navigation-test' } })
-    expect(entry.component).toBe(PluginManagerPage)
+    expect(entry.component).toBe(PluginManagerPanel)
     expect(entry.options).toMatchObject({ key: PANEL_ID })
     expect(entry.locale).toBe(NS)
     // The sidebar entry addresses the page by the same id and speaks the dictionary.

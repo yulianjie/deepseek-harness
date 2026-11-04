@@ -79,6 +79,30 @@
   white-space: nowrap;
 }
 
+.hostToolbar,
+.toolbar[data-host-tools] {
+  display: flex;
+  flex-wrap: wrap;
+  max-width: 100%;
+  align-items: center;
+  gap: 8px;
+}
+
+.hostSearch {
+  flex: 1;
+  min-width: 120px;
+}
+
+.hostButton {
+  max-width: min(240px, 100%);
+}
+
+.hostName {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .addMenu {
   width: 320px;
   max-width: calc(100vw - 48px);

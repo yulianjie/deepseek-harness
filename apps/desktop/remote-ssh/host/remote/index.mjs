@@ -67,7 +67,7 @@ function parseResult(stdout) {
 }
 
 export function createRemoteDeployment({ execSsh }) {
-  async function run(action, host, onProgress, signal) {
+  async function run(action, host, onProgress, signal, authentication) {
     const input = await buildRemoteScript(action, host.instance);
     signal?.throwIfAborted();
     let remainder = '';
@@ -82,6 +82,7 @@ export function createRemoteDeployment({ execSsh }) {
       input,
       signal,
       timeoutMs: 600_000,
+      authentication,
       onStderr(chunk) {
         const lines = (remainder + chunk).split(/\r?\n/);
         remainder = lines.pop();
@@ -93,8 +94,8 @@ export function createRemoteDeployment({ execSsh }) {
   }
 
   return {
-    async deploy(host, onProgress, signal) {
-      const value = await run('deploy', host, onProgress, signal);
+    async deploy(host, onProgress, signal, authentication) {
+      const value = await run('deploy', host, onProgress, signal, authentication);
       if (!UUID.test(value?.hostId) || !UUID.test(value?.instanceId) || !UUID.test(value?.bootId)
         || value.version !== DSH_VERSION
         || !Number.isInteger(value.remotePort) || value.remotePort < 1 || value.remotePort > 65535

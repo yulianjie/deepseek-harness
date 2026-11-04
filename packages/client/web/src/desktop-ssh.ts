@@ -46,6 +46,7 @@ export async function installDesktopSsh(
         transport,
         baseUrl,
       })
+      scope.hostRuntimeFactory.enablePluginHostSelection()
     },
   })
 }
