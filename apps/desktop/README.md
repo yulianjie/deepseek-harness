@@ -55,7 +55,7 @@ Press F12 (Fn+F12 on media-key keyboards), Command+Option+I on macOS, or Ctrl+Sh
 
 ## Remote SSH edition
 
-The fork's `remote-ssh` branch packages **DeepSeek Harness Remote SSH** as a separate app, with its own Harness and agent directories and no official update feed. On the [GitHub Actions workflow](../../.github/workflows/remote-ssh-desktop.yml), open a completed run and download the Windows x64 or macOS installer from **Artifacts**. These builds are unsigned for Windows and are not notarized for macOS.
+The fork's `remote-ssh` branch packages **DeepSeek Harness Remote SSH** as a separate app, with its own Harness and agent directories and no official update feed. After all three platforms pass the packaging checks, the [GitHub Actions workflow](../../.github/workflows/remote-ssh-desktop.yml) publishes their installers to the fork's **Releases** page under `remote-ssh-<commit>`. Windows builds are unsigned and macOS builds are not notarized.
 
 The installed app can run alongside the official Desktop. Its browser data and shell settings live in `%APPDATA%\dsh-remote-ssh-desktop` on Windows or `~/Library/Application Support/dsh-remote-ssh-desktop` on macOS. The fork stores its local Harness profile in `~/.dsh-remote-ssh` and shared agent configuration in `~/.agents-remote-ssh`, regardless of the official app's environment variables. It owns the `dsh-remote-ssh://` protocol and does not offer to install a global `dsh` command. Get newer builds from the fork's workflow artifacts.
 

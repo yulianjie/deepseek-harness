@@ -57,7 +57,7 @@ Desktop Host 的 Platform API 请求与更新策略请求用相同的 Platform �
 
 ## 远程 SSH 版
 
-此 fork 的 `remote-ssh` 分支将 **DeepSeek Harness Remote SSH** 打包为独立应用，使用自己的 Harness 和 agent 目录，不接入官方更新源。打开 [GitHub Actions 工作流](../../.github/workflows/remote-ssh-desktop.yml)中的已完成记录，在 **Artifacts** 下载 Windows x64 或 macOS 安装包。Windows 包未签名，macOS 包未公证。
+此 fork 的 `remote-ssh` 分支将 **DeepSeek Harness Remote SSH** 打包为独立应用，使用自己的 Harness 和 agent 目录，不接入官方更新源。三个平台都通过打包检查后，[GitHub Actions 工作流](../../.github/workflows/remote-ssh-desktop.yml)将安装包发布到 fork 的 **Releases** 页面，标签为 `remote-ssh-<提交号>`。Windows 包未签名，macOS 包未公证。
 
 安装后可与官方桌面端同时运行。浏览器数据和桌面壳设置在 Windows 上位于 `%APPDATA%\dsh-remote-ssh-desktop`，在 macOS 上位于 `~/Library/Application Support/dsh-remote-ssh-desktop`。本机 Harness 配置档案保存在 `~/.dsh-remote-ssh`，共享 agent 配置保存在 `~/.agents-remote-ssh`，不受官方版环境变量影响。此版本使用 `dsh-remote-ssh://` 协议，不提供全局 `dsh` 命令安装。请从该 fork 的工作流产物获取新版。
 

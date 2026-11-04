@@ -57,7 +57,8 @@ jobs:
       - name: Upload unsigned installer
         uses: actions/upload-artifact@v7.0.1
         with:
-          name: remote-ssh-desktop-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+          name: remote-ssh-installer-${{ matrix.target }}
+          overwrite: true
           path: apps/desktop/.desktop-build/targets/${{ matrix.target }}/unsigned-artifacts/deepseek-harness-remote-ssh-*-unsigned.${{ matrix.extension }}
           compression-level: 0
           include-hidden-files: true
@@ -72,3 +73,80 @@ jobs:
           include-hidden-files: true
           if-no-files-found: ignore
           retention-days: 14
+
+  release:
+    name: Publish GitHub Release
+    needs: package
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: remote-ssh-installer-*
+          path: ${{ runner.temp }}/remote-ssh-installers
+          merge-multiple: true
+      - name: Publish verified installers as a prerelease
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          INSTALLER_DIR: ${{ runner.temp }}/remote-ssh-installers
+        run: |
+          version=$(jq -er '.version | strings | select(test("^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$"))' apps/desktop/package.json)
+          tag="remote-ssh-${GITHUB_SHA:0:12}"
+          installers=(
+            "deepseek-harness-remote-ssh-${version}-win-x64-unsigned.exe"
+            "deepseek-harness-remote-ssh-${version}-mac-arm64-unsigned.dmg"
+            "deepseek-harness-remote-ssh-${version}-mac-x64-unsigned.dmg"
+          )
+          files=()
+          for installer in "${installers[@]}"; do
+            file="$INSTALLER_DIR/$installer"
+            if [[ ! -f "$file" || ! -s "$file" ]]; then
+              echo "Missing installer: $installer" >&2
+              exit 1
+            fi
+            files+=("$file")
+          done
+          expected=$(jq -cn --args '$ARGS.positional | sort' "${installers[@]}")
+
+          verify_assets() {
+            jq -e --argjson expected "$expected" \
+              '[.assets[] | if .state == "uploaded" and .size > 0 then .name else null end] | sort == $expected' >/dev/null || {
+              echo "Release $tag does not contain exactly three complete installers" >&2
+              return 1
+            }
+          }
+
+          tag_commit=$(gh api "repos/$GH_REPO/git/matching-refs/tags/$tag" \
+            | jq -r --arg ref "refs/tags/$tag" '.[] | select(.ref == $ref) | .object.sha')
+          if [[ -n "$tag_commit" && "$tag_commit" != "$GITHUB_SHA" ]]; then
+            echo "Tag $tag points to a different commit" >&2
+            exit 1
+          fi
+
+          fields=assets,isDraft,isPrerelease,targetCommitish
+          if release=$(gh release view "$tag" --json "$fields"); then
+            if [[ $(jq -r '.isDraft' <<<"$release") == false ]]; then
+              [[ "$tag_commit" == "$GITHUB_SHA" ]]
+              jq -e '.isPrerelease' <<<"$release" >/dev/null
+              verify_assets <<<"$release"
+              echo "Prerelease $tag already contains all installers"
+              exit 0
+            fi
+            jq -e --arg commit "$GITHUB_SHA" '.isPrerelease and .targetCommitish == $commit' <<<"$release" >/dev/null
+          else
+            gh release create "$tag" --target "$GITHUB_SHA" --draft --prerelease --latest=false \
+              --title "DeepSeek Harness Remote SSH $version (${GITHUB_SHA:0:12})" \
+              --notes "Unsigned desktop installers built from $GITHUB_SHA. [Packaging run]($GITHUB_SERVER_URL/$GH_REPO/actions/runs/$GITHUB_RUN_ID)."
+          fi
+
+          # A failed upload leaves a draft. Only drafts can be resumed or have assets replaced.
+          gh release upload "$tag" "${files[@]}" --clobber
+          gh release view "$tag" --json assets | verify_assets
+          gh release edit "$tag" --draft=false --prerelease --latest=false
