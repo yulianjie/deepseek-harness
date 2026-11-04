@@ -2,6 +2,7 @@ import type { ProductEventMap, ProductEvent } from '@deepseek-ai/dsh-client-prod
 import { WINDOWS_TITLEBAR_HEIGHT } from './windows-layout.ts'
 /** Electron shell: desktop project ownership, custom protocol, windows, and lifecycle. */
 
+import { mkdirSync } from 'node:fs'
 import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -61,6 +62,23 @@ import { DesktopUpdateOverlays } from './update-overlay.ts'
 import { DesktopQuitConfirmation } from './quit-confirmation.ts'
 import { DesktopTray } from './tray.ts'
 import { DesktopBackgroundNotice } from './background-notice.ts'
+import { REMOTE_SSH_DESKTOP } from './remote-ssh-identity.ts'
+
+// Electron has applied the packaged name before this entry point runs.
+const remoteSshEdition = app.isPackaged
+  && (app.name === REMOTE_SSH_DESKTOP.productName || app.name === REMOTE_SSH_DESKTOP.packageName)
+const openScheme = remoteSshEdition ? REMOTE_SSH_DESKTOP.protocol : 'dsh'
+if (remoteSshEdition) {
+  const userData = join(app.getPath('appData'), REMOTE_SSH_DESKTOP.packageName)
+  mkdirSync(userData, { recursive: true })
+  app.setPath('userData', userData)
+  app.setPath('sessionData', userData)
+  if (process.platform === 'win32') app.setAppUserModelId(REMOTE_SSH_DESKTOP.appId)
+  // Inherited overrides may belong to an existing official installation.
+  const home = app.getPath('home')
+  process.env.DSH_HOME = join(home, REMOTE_SSH_DESKTOP.harnessHome)
+  process.env.DSH_AGENTS_HOME = join(home, REMOTE_SSH_DESKTOP.agentsHome)
+}
 
 let focusPrimaryWindow = (): void => {}
 let stopForRecovery = async (): Promise<void> => {}
@@ -148,6 +166,7 @@ interface RuntimeResources {
   readonly node: string
   readonly pnpm: string
   readonly dsh: string
+  readonly remoteSsh: string | undefined
 }
 
 function runtimeResources(): RuntimeResources {
@@ -159,7 +178,10 @@ function runtimeResources(): RuntimeResources {
       : join(process.resourcesPath, 'runtime', 'primary-runtime', 'dependencies', 'pnpm', 'bin', 'pnpm.mjs'))
   const dsh = (development ? process.env.DSH_DESKTOP_DSH_DIR : undefined)
     ?? (development ? join(app.getAppPath(), '.desktop-build', 'development', 'project') : join(app.getAppPath(), 'dsh'))
-  return { node, nodeBin, pnpm, dsh }
+  const remoteSsh = development || remoteSshEdition
+    ? join(development ? app.getAppPath() : process.resourcesPath, 'remote-ssh')
+    : undefined
+  return { node, nodeBin, pnpm, dsh, remoteSsh }
 }
 
 function developmentPrimaryRuntime(): string {
@@ -385,7 +407,8 @@ async function main(): Promise<void> {
   // Copy comes from the same locale as the update prompts so the dialog
   // chrome and its content never mix languages.
   const showAbout = async (): Promise<void> => {
-    await ordinaryMessageBox({ type: 'info', title: locale.messages.aboutMenu, message: locale.messages.aboutProduct,
+    await ordinaryMessageBox({ type: 'info', title: locale.messages.aboutMenu,
+      message: remoteSshEdition ? REMOTE_SSH_DESKTOP.productName : locale.messages.aboutProduct,
       detail: formatDesktopMessage(locale.messages.aboutVersion, { version: app.getVersion() }),
       buttons: [locale.messages.updateAcknowledge], cancelId: 0 })
   }
@@ -447,7 +470,7 @@ async function main(): Promise<void> {
     const host = new DesktopHostProcess(resources.node, resources.dsh, activeProject,
       hostInspectPort, { ...hostEnvironment, DSH_CLIENT_VERSION: desktopClientVersion() }, onFailure,
       primaryRuntime,
-      resources, (next) => { platformView.setSession(next) })
+      resources, (next) => { platformView.setSession(next) }, resources.remoteSsh)
     return {
       start: async () => {
         const ready = await host.start()
@@ -637,7 +660,7 @@ async function main(): Promise<void> {
       }
       return true
     },
-    undefined, undefined, undefined,
+    undefined, remoteSshEdition ? () => false : undefined, undefined,
     (success, reason) => { void track('desktop_upgrade_download_result', { is_success: success, ...reason === undefined ? {} : { error_reason: reason } }) },
     updateChannel,
   )
@@ -800,6 +823,7 @@ async function main(): Promise<void> {
   let promptOperation: Promise<void> | undefined
   let policyAuthenticationQueued = false
   const openUpdatePrompt = (manual = false): Promise<void> => {
+    if (remoteSshEdition) return Promise.resolve()
     if (authenticationOperation !== undefined) {
       policyAuth?.focus(); updateDialog.focus()
     }
@@ -920,7 +944,7 @@ async function main(): Promise<void> {
 
   const automaticCheck = (): void => {
     if (!quitting) void mandatoryPolicy?.check('foreground-or-resume').catch((error: unknown) => { console.error(error) })
-    if (!quitting) void updateSchedule.check().catch((error: unknown) => { console.error(error) })
+    if (!quitting && !remoteSshEdition) void updateSchedule.check().catch((error: unknown) => { console.error(error) })
   }
   powerMonitor.on('resume', automaticCheck)
   app.on('will-quit', () => {
@@ -932,7 +956,7 @@ async function main(): Promise<void> {
   const applicationIconPath = development ? join(app.getAppPath(), 'resources', 'icon-windows.png')
     : join(process.resourcesPath, 'icon.png')
   app.setAboutPanelOptions({
-    applicationName: 'DeepSeek Harness',
+    applicationName: remoteSshEdition ? REMOTE_SSH_DESKTOP.productName : 'DeepSeek Harness',
     applicationVersion: app.getVersion(),
     // The release has no separate build number; omit Electron's bundle version.
     version: '',
@@ -959,8 +983,8 @@ async function main(): Promise<void> {
         click: () => { void showAbout().catch((error: unknown) => { console.error(error) }) } }
       : { label: currentDesktopLocale().messages.aboutMenu, role: 'about' },
     { type: 'separator' },
-    { label: currentDesktopLocale().messages.checkUpdatesMenu, click: () => { void openUpdatePrompt(true) } },
-    ...process.platform === 'darwin' || process.platform === 'win32'
+    ...remoteSshEdition ? [] : [{ label: currentDesktopLocale().messages.checkUpdatesMenu, click: () => { void openUpdatePrompt(true) } }],
+    ...!remoteSshEdition && (process.platform === 'darwin' || process.platform === 'win32')
       ? [{ label: currentDesktopLocale().messages.cliCommandMenu, click: () => { void commandManager.show() } }] : [],
     ...development ? [
       { type: 'separator' as const },
@@ -1232,10 +1256,10 @@ async function main(): Promise<void> {
     window.focus()
   }
 
-  if (app.isPackaged || process.env.DSH_DESKTOP_DEV_APP === '1') app.setAsDefaultProtocolClient('dsh')
+  if (app.isPackaged || process.env.DSH_DESKTOP_DEV_APP === '1') app.setAsDefaultProtocolClient(openScheme)
   app.on('open-url', (event, url) => {
     event.preventDefault()
-    if (url === 'dsh://open' || url === 'dsh://open/') focusPrimaryWindow()
+    if (url === `${openScheme}://open` || url === `${openScheme}://open/`) focusPrimaryWindow()
   })
 
   app.on('activate', (_event, hasVisibleWindows) => {
@@ -1293,7 +1317,7 @@ async function main(): Promise<void> {
   const policyInput: unknown = app.isPackaged
     ? ('dshMandatoryUpdatePolicy' in manifest ? manifest.dshMandatoryUpdatePolicy : undefined)
     : developmentPolicy === undefined ? undefined : JSON.parse(developmentPolicy) as unknown
-  const policyConfig = resolveDesktopPolicyConfig(policyInput, !app.isPackaged)
+  const policyConfig = remoteSshEdition ? undefined : resolveDesktopPolicyConfig(policyInput, !app.isPackaged)
   if (policyConfig !== undefined) {
     if (policyConfig.authentication === 'feishu-test') {
       policyAuth = new DesktopPolicyTestAuth(policyConfig.origin, policyConfig.allowedAuthOrigins, locale,

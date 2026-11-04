@@ -102,6 +102,8 @@ export interface AssembledRemoteOptions {
   readonly developerTools?: boolean
   /** Return the fixture's image-dimension admission error from Session prompt. */
   readonly rejectPrompt?: boolean
+  /** The source-composition proxy sends positional arguments instead of generated wire fields. */
+  readonly positionalRequests?: boolean
 }
 
 export interface AssembledRemote {
@@ -116,6 +118,7 @@ const fixtureSource = readFileSync(
 /** Create one isolated RemoteMock world for an assembled built-client case. */
 export function createAssembledRemote(options: AssembledRemoteOptions = {}): AssembledRemote {
   const fixture = JSON.parse(fixtureSource) as CapturedFixture
+  const decodeRequest = (value: unknown): unknown => options.positionalRequests === true ? value : recordValue(value, 'request')
   const sessions = [...structuredClone(fixture.sessionList.value.items)]
   const workspaces = [...structuredClone(fixture.workspace.value.items)]
   const records = new Map<string, EventRecord[]>([[
@@ -191,7 +194,7 @@ export function createAssembledRemote(options: AssembledRemoteOptions = {}): Ass
     })
   })
   mock.stream('session/follow', ([args], stream) => {
-    const request = recordValue(args, 'request')
+    const request = decodeRequest(args)
     const sessionId = followedSessionId(request)
     if (sessionId === 'fx-alpha') {
       stream.push(structuredClone(fixture.follow))
@@ -228,12 +231,12 @@ export function createAssembledRemote(options: AssembledRemoteOptions = {}): Ass
   mock.unary('schedule/catalog', () => ok([]))
   mock.unary('schedule/list', () => ok([]))
   mock.unary('session/projections', (request: unknown) => {
-    const sessionId = recordString(recordValue(request, 'request'), 'sessionId')
+    const sessionId = recordString(decodeRequest(request), 'sessionId')
     const summary = sessions.find(candidate => candidate.sessionId === sessionId)
     return ok(structuredClone(summary?.projections ?? fixture.control.value.projections[sessionId] ?? null))
   })
   mock.unary('workspace/create', (request: unknown) => {
-    const path = recordString(recordValue(request, 'request'), 'path')
+    const path = recordString(decodeRequest(request), 'path')
     const existing = workspaces.find(workspace => workspace.path === path)
     if (existing !== undefined) return ok({ workspace: structuredClone(existing), created: false })
     const now = new Date().toISOString()
@@ -250,7 +253,7 @@ export function createAssembledRemote(options: AssembledRemoteOptions = {}): Ass
     return ok({ workspace: structuredClone(workspace), created: true })
   })
   mock.unary('session/create', (request: unknown) => {
-    request = recordValue(request, 'request')
+    request = decodeRequest(request)
     const requestedId = optionalRecordString(request, 'sessionId')
     const sessionId = requestedId ?? `fx-${String(nextSession++)}`
     const existing = sessions.find(candidate => candidate.sessionId === sessionId)
@@ -283,7 +286,7 @@ export function createAssembledRemote(options: AssembledRemoteOptions = {}): Ass
     return ok({ sessionId })
   })
   mock.unary('session/attachment', (request: unknown) => {
-    request = recordValue(request, 'request')
+    request = decodeRequest(request)
     const attachmentId = recordString(request, 'attachmentId')
     return attachments.get(attachmentId) ?? {
       ok: false,
@@ -295,7 +298,7 @@ export function createAssembledRemote(options: AssembledRemoteOptions = {}): Ass
     }
   })
   mock.unary('session/prompt', (request: unknown) => {
-    request = recordValue(request, 'request')
+    request = decodeRequest(request)
     if (options.rejectPrompt === true) {
       return {
         ok: false,
@@ -345,8 +348,9 @@ export function createAssembledRemote(options: AssembledRemoteOptions = {}): Ass
     }, 'append')
     sessionRecords.push(turnEvent, userEvent)
     records.set(sessionId, sessionRecords)
-    mock.streams.push('session/follow', turnEvent, follows(sessionId))
-    mock.streams.push('session/follow', userEvent, follows(sessionId))
+    const followsSession = ([args]: readonly unknown[]) => followedSessionId(decodeRequest(args)) === sessionId
+    mock.streams.push('session/follow', turnEvent, followsSession)
+    mock.streams.push('session/follow', userEvent, followsSession)
     return ok({ accepted: true })
   })
   mock.unary('commands/execute', (args: unknown) => {
@@ -383,10 +387,6 @@ function eventOf(
       ...(surfaceOp === undefined ? {} : { surfaceOp }),
     },
   }
-}
-
-function follows(sessionId: string): (args: readonly unknown[]) => boolean {
-  return ([args]) => followedSessionId(recordValue(args, 'request')) === sessionId
 }
 
 function followedSessionId(value: unknown): string {

@@ -93,6 +93,26 @@ describe('ui-layout client apply', () => {
     expect(slots.spec('shell.leading')).toEqual({ kind: 'single', scope: 'root' })
   })
 
+  it('reports the shell conversation hidden while a Settings panel is selected', async () => {
+    const { ctx, slots } = await bench()
+    ctx.provide('hostPaneVisibility', createSnapshotStore(false))
+    await ctx.plugin({ inject: [...inject], apply })
+    const settings = 'settings-fixture' as MainPanelId
+    slots.register({ name: 'main', key: settings }, () => null)
+    const layout = ctx.get('layout')
+    const visibility = ctx.get('shellConversationVisibility')
+    if (layout === undefined || visibility === undefined) throw new Error('shell layout did not activate')
+    expect(visibility.getSnapshot()).toBe(true)
+    const observed: boolean[] = []
+    const stop = visibility.subscribe(() => observed.push(visibility.getSnapshot()))
+    layout.selectPanel(settings)
+    expect(visibility.getSnapshot()).toBe(false)
+    layout.selectPanel(null)
+    expect(visibility.getSnapshot()).toBe(true)
+    expect(observed).toEqual([false, true])
+    stop()
+  })
+
   it('shares a pre-created instance between service actions, root rendering, and panelInfo', async () => {
     const { ctx, slots, rendererHost } = await bench()
     const fiber = ctx.plugin({ inject: [...inject], apply })

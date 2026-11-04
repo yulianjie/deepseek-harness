@@ -492,6 +492,13 @@ describe('connection client apply', () => {
     })
   })
 
+  it('keeps a routed remote Host nonlocal when the shell listens on loopback', async () => {
+    ;(globalThis as Win).location = { hostname: '127.0.0.1' }
+    ;(globalThis as Win).__DSH_TRANSPORT__ = { ownsHost: false }
+    const handle = await mount()
+    expect(handle.isLoopback).toBe(false)
+  })
+
   it('exposes a worker-local Gateway stream through connection.rpc.open', async () => {
     ;(globalThis as Win).location = { hostname: 'preview.example' }
     const openStream = vi.fn<NonNullable<ClientTransportHooks['openStream']>>(

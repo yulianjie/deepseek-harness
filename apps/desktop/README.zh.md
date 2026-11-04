@@ -13,6 +13,7 @@ Desktop 在原生应用中运行 Harness 工作区。本参考文档说明应用
 ## 目录
 
 - [应用概览](#application-overview)
+- [远程 SSH 版](#remote-ssh-edition)
 - [终端命令](#terminal-command)
 - [关闭窗口与退出](#closing-the-window-and-quitting)
 - [关键技术决策](#key-technical-decisions)
@@ -51,6 +52,22 @@ Desktop Host 的 Platform API 请求与更新策略请求用相同的 Platform �
 桌面麦克风访问仅允许主 `dsh-app://app` 页面发起的音频请求。macOS 使用系统麦克风授权、随包用途说明，以及主应用与 Helper 签名中的 `com.apple.security.device.audio-input` 权限。
 
 按 F12（多媒体功能键键盘上为 Fn+F12）、macOS 的 Command+Option+I 或 Windows 的 Ctrl+Shift+I，可切换当前获得焦点的应用页面的 DevTools，打包版本同样支持。这些原生快捷键通过隐藏的应用菜单项注册。更新遮罩和打包版本的内嵌浏览器禁用 DevTools。
+
+<a id="remote-ssh-edition"></a>
+
+## 远程 SSH 版
+
+此 fork 的 `remote-ssh` 分支将 **DeepSeek Harness Remote SSH** 打包为独立应用，使用自己的 Harness 和 agent 目录，不接入官方更新源。打开 [GitHub Actions 工作流](../../.github/workflows/remote-ssh-desktop.yml)中的已完成记录，在 **Artifacts** 下载 Windows x64 或 macOS 安装包。Windows 包未签名，macOS 包未公证。
+
+安装后可与官方桌面端同时运行。浏览器数据和桌面壳设置在 Windows 上位于 `%APPDATA%\dsh-remote-ssh-desktop`，在 macOS 上位于 `~/Library/Application Support/dsh-remote-ssh-desktop`。本机 Harness 配置档案保存在 `~/.dsh-remote-ssh`，共享 agent 配置保存在 `~/.agents-remote-ssh`，不受官方版环境变量影响。此版本使用 `dsh-remote-ssh://` 协议，不提供全局 `dsh` 命令安装。请从该 fork 的工作流产物获取新版。
+
+本地打包时，设置 `DSH_DESKTOP_REMOTE_SSH=1` 再运行对应平台的打包命令。该设置生成未签名的 fork 安装包，并忽略官方发布配置。
+
+1. 先在终端确认 `ssh <别名>` 能正常登录。继续使用已有的 OpenSSH 配置、密钥或 SSH agent。
+2. 在桌面端侧栏打开**远程连接**，添加别名或通过**发现 SSH 别名**选择，随后点击**连接**。首次连接可在远端 Linux 账号下安装并启动固定版本的 Harness。建议在远端登录终端使用 Node.js 24。安装会沿用该终端实际选中的 Node，不兼容时直接报错。
+3. 在**添加工作区**中选择 SSH 主机，再浏览到远端项目。本机和 SSH 项目共用侧栏，选择会话即可无刷新切换。如果远端还没有配置模型，请在远端配置。远程命令、文件、Git 改动、附件和会话历史均归属远端。
+
+SSH 断开后，在**远程连接**中重连。远程会话不会回落到本机，未完成的请求也不会自动重放。关闭桌面端连接后，远端 Harness 继续运行。
 
 <a id="terminal-command"></a>
 
@@ -201,6 +218,8 @@ pnpm run dev:desktop
 ```sh
 pnpm run start:desktop
 ```
+
+在 Windows x64 上，两条开发命令均可通过 `--reuse-primary-runtime=<绝对目录>` 复用版本匹配的已安装 runtime。启动器核对锁定的目标和版本，将 runtime 与当前源码的 Office 资源复制到 `.desktop-build/development/runtime-reuse`，并在启动 Electron 前从缩短的缓存路径运行原生检查。省略此参数时，从锁定的归档准备 runtime。
 
 Web 侧的对应命令是 `pnpm run dev:web` 与 `pnpm run start:web`，见[开发指南](../../docs/development.zh.md)。Workspace 开发使用 Electron RunAsNode 运行当前 CLI 与私有 Desktop Host 包，插件管理和恢复使用 `$DSH_HOME/profiles/desktop`，与一次性工作区运行时分离。Host 在开发与打包构建中都使用 runtime 模块解析，不创建官方包的 fallback 链接；开发者安装的包（包括链接）保留原生优先级。需要验证 Electron RunAsNode、内置 pnpm、内置 dsh 资源、插件安装和修复时，应运行未封装安装器的应用目录。
 

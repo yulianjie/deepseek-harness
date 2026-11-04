@@ -14,7 +14,7 @@ import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 import type {} from '@deepseek-ai/dsh-client-ui-theme/client'
 import type { HostObservable, SnapshotSelectorHook } from '@deepseek-ai/dsh-client-ui-slots'
 import type { PanelInfo } from './service.ts'
-import { AppFrame } from './AppFrame.tsx'
+import { AppFrame, HostAwareAppFrame, HostPaneRoot } from './AppFrame.tsx'
 import { createLayoutStore } from './stores.ts'
 import { LayoutController } from './service.ts'
 import type { ShortcutCommandId } from '@deepseek-ai/dsh-client-shortcuts/client'
@@ -149,15 +149,26 @@ export interface RightbarOwnerProps {
 /** Required services (cordis fiber inject — the loader passes all module exports as an object plugin). */
 export const inject = ['slots', 'theme', 'locale', 'shortcuts']
 
+/** Layout choices for the client shell or a Host pane inside it. */
+export interface LayoutOptions {
+  /** A pane leaves the surrounding window shell's navigation and chrome in place. */
+  readonly presentation?: 'shell' | 'pane'
+  /** Expose this pane's Workspace browser to the surrounding shell. */
+  readonly workspaceProjection?: boolean
+}
+
 /**
  * Client plugin body: provide ctx.layout, then one register() call — AppFrame
  * into 'root' with its child-slot declarations, the layout store seat,
  * and the shared root instance supplying commands and the panel-info source.
  * @param ctx - client root context.
+ * @param options - use the pane presentation inside an existing shell.
  */
-export function apply(ctx: ClientContext): void {
-  ctx.effect(() => ctx.locale.register('shortcuts.layout', { zh, en }), 'layout: command labels')
-  const t = ctx.locale.bind('shortcuts.layout')
+export function apply(ctx: ClientContext, options?: LayoutOptions): void {
+  const pane = options?.presentation === 'pane'
+  const hostPane = pane ? undefined : ctx.get('hostPaneVisibility')
+  if (!pane) ctx.effect(() => ctx.locale.register('shortcuts.layout', { zh, en }), 'layout: command labels')
+  const t = pane ? undefined : ctx.locale.bind('shortcuts.layout')
 
   ctx.effect(() => {
     const handle = createLayoutStore()
@@ -175,7 +186,13 @@ export function apply(ctx: ClientContext): void {
       ctx.slots.entries('main').some(entry => entry.options.key === id), panelInfo)
     const disposePanelInfo = ctx.slots.provideRoot({ hooks: { panelInfo: layout.panelInfo } })
     const disposeService = ctx.reflect.provide('layout', layout)
-    const disposeRegistration = ctx.slots.register({
+    const disposeConversationVisibility = hostPane === undefined ? undefined : ctx.reflect.provide('shellConversationVisibility', {
+      getSnapshot: () => panelInfo.getSnapshot().activePanelId === null,
+      subscribe: (listener: () => void) => panelInfo.subscribe(listener),
+    })
+    const disposeShowConversation = hostPane === undefined ? undefined
+      : ctx.reflect.provide('showShellConversation', () => { layout.selectPanel(null) })
+    const frame = {
       name: 'root',
       locale: 'common',
       children: {
@@ -185,10 +202,22 @@ export function apply(ctx: ClientContext): void {
         'shell.bottom': { kind: 'single', scope: 'root' },
         'shell.overlay': { kind: 'list', scope: 'root' },
         'shell.leading': { kind: 'single', scope: 'root' },
+        'shell.host-pane': { kind: 'single', scope: 'root' },
       },
       store,
-    }, AppFrame)
-    const disposeShortcut = ctx.shortcuts.register({
+    } as const
+    const disposeRegistration = pane
+      ? options?.workspaceProjection
+        ? ctx.slots.register({
+          ...frame,
+          children: { ...frame.children, 'sidebar.workspaces': { kind: 'single', scope: 'root' } },
+          inject: () => ({ pane: true }),
+        }, HostPaneRoot)
+        : ctx.slots.register({ ...frame, inject: () => ({ pane: true }) }, AppFrame)
+      : hostPane === undefined
+        ? ctx.slots.register(frame, AppFrame)
+        : ctx.slots.register({ ...frame, inject: () => ({ hooks: { hostPane } }) }, HostAwareAppFrame)
+    const disposeShortcut = t === undefined ? undefined : ctx.shortcuts.register({
       id: 'sidebar.left.toggle' as ShortcutCommandId, label: () => t('toggle'), aliases: ['sidebar', 'toggle left sidebar'],
       defaults: {
         'desktop:macos': { code: 'KeyB', modifiers: ['primary'] },
@@ -203,15 +232,19 @@ export function apply(ctx: ClientContext): void {
     const disposePanels = ctx.slots.subscribe('main', retainMainPanels)
     retainMainPanels()
     return () => {
-      disposeShortcut()
+      disposeShortcut?.()
       layout.dispose()
       disposePanels()
       disposeRegistration()
       disposePanelInfo()
       // provide()'s disposer settles asynchronously; teardown is synchronous fire-and-forget.
+      void disposeShowConversation?.()
+      void disposeConversationVisibility?.()
       void disposeService()
     }
   }, 'ui-layout: service + root registration')
+
+  if (pane) return
 
   // Theme presentation: pure DOM writes from resolved snapshots — initial
   // state through the getter once, then event-driven only; no React path.

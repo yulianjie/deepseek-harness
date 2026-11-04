@@ -109,6 +109,9 @@ export function apply(ctx: ClientContext): void {
   // template this follows (ui-conversation's definition registry) is built at
   // its own apply top level for the same reason.
   const t = ctx.locale.bind(NS)
+  const storage = ctx.get('hostStorage')
+  const foreground = ctx.get('hostForeground')
+  const canFocus = () => foreground?.getSnapshot() !== false
   const tabs = new SidebarRightTabRegistry(ctx)
   const views = new SidebarSessionViews(ctx.sessions)
   ctx.effect(() => {
@@ -127,9 +130,10 @@ export function apply(ctx: ClientContext): void {
     (address, signal) => { ctx.resources.pin(address, signal) },
     {
       autoFullscreen: () => autoFullscreen,
-      openWithFocus: (sessionId, open) => { openWithPaneFocus(document, sessionId, open) },
-      closeWithFocus: (sessionId, paneId, close) => { closeWithPaneFocus(document, sessionId, paneId, close) },
+      openWithFocus: (sessionId, open) => { openWithPaneFocus(document, sessionId, open, canFocus) },
+      closeWithFocus: (sessionId, paneId, close) => { closeWithPaneFocus(document, sessionId, paneId, close, canFocus) },
     },
+    storage,
   )
   // The Session on screen: the selected one while the Conversation fills the
   // main column. Both sources notify before React renders their change, so the
@@ -138,14 +142,17 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => {
     const sync = (): void => {
       const selected = views.source.getSnapshot().find(view => view.selected)
-      show(layout.panelInfo.getSnapshot().activePanelId === null ? selected?.sessionId : undefined)
+      const visible = canFocus() && layout.panelInfo.getSnapshot().activePanelId === null
+      show(visible ? selected?.sessionId : undefined)
     }
     const unsubscribeViews = views.source.subscribe(sync)
     const unsubscribePanel = layout.panelInfo.subscribe(sync)
+    const unsubscribeForeground = foreground?.subscribe(sync)
     sync()
     return () => {
       unsubscribeViews()
       unsubscribePanel()
+      unsubscribeForeground?.()
       show(undefined)
     }
   }, 'ui-sidebar-right: on-screen Session')
@@ -165,10 +172,10 @@ export function apply(ctx: ClientContext): void {
   ctx.effect(() => registerSidebarShortcuts(ctx.shortcuts, controller, t, () => {
     void ctx.shortcuts.closeWindow().catch((error: unknown) => { console.error('Window close failed', error) })
   }), 'ui-sidebar-right: shortcuts')
-  if (typeof document !== 'undefined') ctx.effect(() => observeSidebarFocus(document), 'ui-sidebar-right: focus')
+  if (typeof document !== 'undefined') ctx.effect(() => observeSidebarFocus(document, canFocus), 'ui-sidebar-right: focus')
 
   ctx.effect(() => {
-    const handle = createSidebarRightStore(() => defaultSeed(tabs))
+    const handle = createSidebarRightStore(() => defaultSeed(tabs), storage)
     // Each Session Context generation owns one Store. Background tab actions
     // use the latest adoption for that Session.
     const adoptions = new Map<SessionId, () => void>()

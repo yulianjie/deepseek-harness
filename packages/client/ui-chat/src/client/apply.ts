@@ -22,13 +22,13 @@ import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from '@deepseek-ai/dsh-client-ui-workspace/client'
 import type {
-  ChatFlowDataInjected, ChatFlowInjected, ChatNodeInjected, ChatScrollPosition, ChatViewInjected,
+  ChatFlowDataInjected, ChatFlowInjected, ChatNodeInjected, ChatScrollPosition, ChatViewInjected, HostMediaHooks,
   QuotaNoticeInjected, QuotaNoticeState, TurnTailOwnerProps,
 } from './contract/slots.ts'
 import type { ChatSnapshot } from './contract/snapshot.ts'
 import { EMPTY_CHAT_SNAPSHOT } from './contract/snapshot.ts'
 import { ApprovalCommand } from './chat/ApprovalCommand.tsx'
-import { ChatView } from './chat/ChatView.tsx'
+import { HostChatView } from './chat/ChatView.tsx'
 import { ChatFlow } from './chat/ChatFlow.tsx'
 import { registerChatNodeRenderers } from './chat/register-node-renderers.ts'
 import { UserContent } from './chat/UserContent.tsx'
@@ -169,7 +169,10 @@ export function apply(ctx: Context): void {
   const performancePolicy = new PerformanceUsagePolicy(chatSettings)
   ctx.effect(() => () => { transcriptView.dispose(); performancePolicy.dispose() })
   const performanceUsage = performancePolicy.mode
-  registerChatNodeRenderers(ctx, performanceUsage, presentation)
+  const resourceUrl = ctx.get('hostPageAccess')?.resourceUrl
+  const hostMediaGeneration = (resourceUrl === undefined ? undefined : ctx.get('connection')?.generation)
+    ?? { getSnapshot: () => undefined, subscribe: () => () => {} }
+  registerChatNodeRenderers(ctx, performanceUsage, presentation, hostMediaGeneration)
   ctx.slots.registerFactory({
     name: 'conversation.chat.user.content', scope: 'session', locale: NS,
     children: { 'conversation.chat.user.images': { kind: 'single', scope: 'session' } },
@@ -235,13 +238,15 @@ export function apply(ctx: Context): void {
         'conversation.chat.flow': { kind: 'single', scope: 'session', inject: CHAT_FLOW_INJECT },
       },
       store: chatStore,
-      inject: (sessionId: SessionId): ChatViewInjected => {
+      inject: (sessionId: SessionId): ChatViewInjected & { hooks: HostMediaHooks } => {
         const binding = ctx.sessions.binding(sessionId)
         if (binding === undefined) throw new Error(`ui-chat: unknown session "${sessionId}"`)
         const session = binding.session
         const chat = chatSource(binding)
         return {
           ...nodeSources(binding),
+          hooks: { presentation, hostMediaGeneration },
+          resourceUrl,
           fileMentions: (owner: TurnTailOwnerProps) => ctx.get('chatFileMentions')?.forClosing(owner, sessionId),
           // Files open in the right Sidebar, not in a desktop application: the
           // content stays in the product, beside the conversation that produced
@@ -295,7 +300,7 @@ export function apply(ctx: Context): void {
           },
         }
       },
-    }, ChatView)
+    }, HostChatView)
     return disposeView
   })
 

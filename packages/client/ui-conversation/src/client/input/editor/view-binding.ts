@@ -18,7 +18,7 @@ interface DraftViewGate {
   uploadsPending: boolean
   showToast: (text: string) => void
   t: ComposerBarProps['t']
-  canAcceptDrop: boolean
+  canPickFiles: boolean
 }
 
 /**
@@ -87,11 +87,11 @@ export function installDraftWheel(scrollRef: RefObject<HTMLDivElement>): (() => 
  */
 export function installDraftFilePicker(
   keyboard: ComposerKeyboard,
-  gate: MutableRefObject<Pick<DraftViewGate, 'canAcceptDrop'>>,
+  gate: MutableRefObject<Pick<DraftViewGate, 'canPickFiles'>>,
   fileInputRef: RefObject<HTMLInputElement>,
 ): () => void {
   return keyboard.bindFilePicker({
-    available: () => gate.current.canAcceptDrop && fileInputRef.current !== null && !fileInputRef.current.disabled,
+    available: () => gate.current.canPickFiles && fileInputRef.current !== null && !fileInputRef.current.disabled,
     open: () => { fileInputRef.current?.click() },
   })
 }

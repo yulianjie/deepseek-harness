@@ -33,6 +33,8 @@ Open Settings → General and select a registered language. The active locale is
 
 Native shells may provide `__DSH_LOCALE__` with an asynchronous `read()` and an `onChange(locale)` callback. Initialization supplies the current Host preference and ordered OS languages before the Client mounts. Automatic selection stays provisional; only Settings selections write `locale.preference`. A fresh read on each page load prevents a stale preload preference after reload. Ordinary browsers keep navigator-based detection and their existing settings-scope policy.
 
+With `presentation: 'pane'`, the additional Host applies its locale to its own slot tree. The outer shell retains the native locale bridge and `<html lang>`.
+
 ### Registering a dictionary
 
 Call `ctx.locale.register(ns, { zh, en })` with a namespace merged into `LocaleNamespaceMap`; the compiler checks every key against the namespace's typed key union and requires both shipped locales. Consumers translate through `ctx.locale.bind(ns)` or the framework-injected `t` seat. A dictionary registered after the UI is already mounted is picked up without a remount.

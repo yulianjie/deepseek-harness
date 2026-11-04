@@ -14,7 +14,7 @@
  * are slot entries with their own behavior, so this component threads no
  * action callbacks and hosts no action surface.
  */
-import { type CSSProperties, type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
+import { type CSSProperties, type ReactNode, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import clsx from 'clsx'
 import {
   Button, HoverCardGroup, IconArchiveCheckOutlineRegular, IconArchiveOffOutlineRegular, IconArchiveOutlineRegular,
@@ -29,7 +29,7 @@ import type {
 import type { WorkspaceId, WorkspaceView } from '@deepseek-ai/dsh-api-workspace-controller/client'
 import { workspaceDisplayTitle } from '@deepseek-ai/dsh-api-workspace-controller/default-workspace'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
-import type { PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
+import type { HostWorkspaceProjection, PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
 import type { WorkspaceBrowserProps } from '../contract/slots.ts'
 import type { ArchivedFilter, GroupNode, SessionNode, SessionOrderBy, SessionRowState } from '../tree.ts'
 import {
@@ -47,6 +47,10 @@ import css from './WorkspaceBrowser.module.css'
  * focus() forces a synchronous layout and would jank the slide.
  */
 const EXPAND_SLIDE_MS = 300
+const NO_PROJECTIONS: readonly HostWorkspaceProjection[] = []
+const noopSubscribe = () => () => {}
+const emptyProjections = () => NO_PROJECTIONS
+const activeHost = () => true
 /** Pause between the latest keystroke and a Host content-search request. */
 const SEARCH_DEBOUNCE_MS = 250
 /** `session.search` wire bound, measured in JavaScript UTF-16 code units. */
@@ -260,6 +264,9 @@ type SessionTreeProps = Pick<
   | 'sidebar.session.row.leading'
   | 'sidebar.session.row.hover'
 > & {
+  embedded: boolean
+  hostActive: boolean
+  hostLabel: string | undefined
   shortcuts: readonly import('@deepseek-ai/dsh-client-shortcuts/client').ShortcutCatalogEntry[]
   /** Always-mounted Session list snapshot. */
   list: SessionListState
@@ -315,7 +322,7 @@ function EmptySessions({ rowState, onLeaveArchivedOnly, t }: Pick<SessionTreePro
 
 /** The scrolling session tree; unmounting drops the sessions subscription and the session watermarks. */
 function SessionTree({
-  list, useSessionStatus, startSession, open, workspaces, ungroupedSessionIds,
+  list, useSessionStatus, startSession, open, workspaces, ungroupedSessionIds, embedded, hostActive, hostLabel,
   rowState, onLeaveArchivedOnly,
   workspaceReady, animationResetKey, usePanelInfo,
   onRenameRequest, onDeleteRequest, onSessionRenameRequest,
@@ -327,7 +334,7 @@ function SessionTree({
 }: SessionTreeProps) {
   const panelActive = usePanelInfo(info => info.activePanelId !== null)
   const statuses = useSessionStatus(s => s)
-  const current = panelActive
+  const current = panelActive || !hostActive
     ? undefined
     : Object.values(list.byId).find(session => (session.retainedBy.mainView ?? 0) > 0)?.id
   const revealGroup = revealSessionId === undefined || !workspaceReady
@@ -555,6 +562,7 @@ function SessionTree({
           }}
       >
         <ProjectRowItem
+          hostLabel={hostLabel}
           newShortcut={shortcuts.find(row => row.id === 'session.new')}
           group={group}
           containsCurrentDescendant={currentAncestors.has(group.key)}
@@ -625,6 +633,7 @@ function SessionTree({
               key={node.id}
               node={node}
               currentId={current}
+              hostLabel={hostLabel}
               now={now}
               onOpen={open}
               onRenameRequest={onSessionRenameRequest}
@@ -669,25 +678,26 @@ function SessionTree({
     <HoverCardGroup className={clsx(css.treeBody, css.wide)}>
       {workspaceDropAtListStart && <span className={css.listTopDropIndicator} aria-hidden="true" />}
       <AnimatedRows
-        className={clsx(css.list, workspaceDropAtListStart && css.listTopDropActive)}
+        embedded={embedded}
+        className={clsx(embedded ? css.embeddedList : css.list, workspaceDropAtListStart && css.listTopDropActive)}
         label={t('section.sessions')}
         rowKeys={rowKeys}
         ready={list.phase === 'ready' && workspaceReady && !nativeDragActive}
         resetKey={JSON.stringify([animationResetKey, watermarkMotionKey])}
       >
-        {groups.length === 0 && (
+        {groups.length === 0 && !embedded && (
           <EmptySessions rowState={rowState} onLeaveArchivedOnly={onLeaveArchivedOnly} t={t} />
         )}
         {groupRows}
       </AnimatedRows>
-      <span className={css.fade} />
+      {!embedded && <span className={css.fade} />}
     </HoverCardGroup>
   )
 }
 
 /** The flat "In one list" body: every session is one draggable top-level row. */
 function FlatList({
-  list, sessionIds, rowState, onLeaveArchivedOnly, useSessionStatus, open, onSessionRenameRequest,
+  list, sessionIds, rowState, onLeaveArchivedOnly, useSessionStatus, open, onSessionRenameRequest, embedded, hostActive, hostLabel,
   usePanelInfo, setSessionOrder, workspaceReady, animationResetKey,
   revealSessionId, onSessionRevealed, renderSlot, t,
 }: Pick<
@@ -704,6 +714,7 @@ function FlatList({
   | 'onSessionRevealed'
   | 'rowState'
   | 'onLeaveArchivedOnly'
+  | 'embedded' | 'hostActive' | 'hostLabel'
   | 't'
 > & {
   list: SessionListState
@@ -718,7 +729,7 @@ function FlatList({
   const [drag, setDrag] = useState<DragState | null>(null)
   const dropCommitted = useRef(false)
   useNativeDragAcceptance(drag !== null)
-  const currentId = panelActive
+  const currentId = panelActive || !hostActive
     ? undefined
     : Object.values(list.byId).find(session => (session.retainedBy.mainView ?? 0) > 0)?.id
   const commitDrag = (activeDrag: DragState, over: NonNullable<DragState['over']>): void => {
@@ -732,13 +743,14 @@ function FlatList({
   return (
     <HoverCardGroup className={clsx(css.treeBody, css.wide)}>
       <AnimatedRows
-        className={clsx(css.list, css.flatList)}
+        embedded={embedded}
+        className={clsx(embedded ? css.embeddedList : css.list, css.flatList)}
         label={t('section.sessions')}
         rowKeys={rows.length === 0 ? ['empty'] : rows.map(row => `session:${row.id}`)}
         ready={list.phase === 'ready' && workspaceReady && drag === null}
         resetKey={animationResetKey}
       >
-        {rows.length === 0 && (
+        {rows.length === 0 && !embedded && (
           <EmptySessions rowState={rowState} onLeaveArchivedOnly={onLeaveArchivedOnly} t={t} />
         )}
         {rows.map((node) => {
@@ -750,6 +762,7 @@ function FlatList({
               key={node.id}
               node={node}
               currentId={currentId}
+              hostLabel={hostLabel}
               now={now}
               onOpen={open}
               onRenameRequest={onSessionRenameRequest}
@@ -783,7 +796,7 @@ function FlatList({
           )
         })}
       </AnimatedRows>
-      <span className={css.fade} />
+      {!embedded && <span className={css.fade} />}
     </HoverCardGroup>
   )
 }
@@ -808,6 +821,7 @@ function SearchResults({
   remote,
   resultLimit,
   usePanelInfo,
+  embedded, hostActive, hostLabel,
   t,
 }: Pick<WorkspaceBrowserProps, 'useSessions' | 'useSessionStatus' | 'open' | 't' | 'usePanelInfo'> & {
   workspaces: readonly WorkspaceView[]
@@ -819,6 +833,9 @@ function SearchResults({
   query: string
   remote: RemoteSearchState
   resultLimit: number
+  embedded: boolean
+  hostActive: boolean
+  hostLabel: string | undefined
 }) {
   const panelActive = usePanelInfo(info => info.activePanelId !== null)
   const list = useSessions(s => s)
@@ -840,19 +857,20 @@ function SearchResults({
     [list, workspaces, query, archivedSessionIds, archivedFilter, statuses, currentRemote, resultLimit],
   )
   const pending = currentRemote.status === 'loading'
-  const currentId = panelActive
+  const currentId = panelActive || !hostActive
     ? undefined
     : Object.values(list.byId).find(session => (session.retainedBy.mainView ?? 0) > 0)?.id
 
   return (
     <div className={clsx(css.treeBody, css.wide)}>
-      <div className={css.list}>
-        <div className={css.searchTree} role="tree" aria-label={t('search.results.aria')}>
+      <div className={embedded ? css.embeddedList : css.list}>
+        <div className={css.searchTree} role={embedded ? 'group' : 'tree'} aria-label={t('search.results.aria')}>
           {results.items.map(result => (
             <SearchResultItem
               key={result.id}
               result={result}
               currentId={currentId}
+              hostLabel={hostLabel}
               onOpen={open}
               onUnarchive={onUnarchive}
               t={t}
@@ -874,7 +892,7 @@ function SearchResults({
             ))}
           </div>
         )}
-        {!pending && results.items.length === 0 && (
+        {!embedded && !pending && results.items.length === 0 && (
           <div className={css.empty}>{t('search.noMatches')}</div>
         )}
         {results.hasMore && (
@@ -883,7 +901,7 @@ function SearchResults({
           </div>
         )}
       </div>
-      <span className={css.fade} />
+      {!embedded && <span className={css.fade} />}
     </div>
   )
 }
@@ -917,6 +935,9 @@ export function WorkspaceBrowser({
   useHostInfo,
   useShortcuts,
   useWorkspaceShortcuts,
+  workspaceProjections,
+  workspaceHostActive,
+  projection,
   requestSearch,
   requestAddWorkspace,
   closeAddWorkspace,
@@ -924,6 +945,13 @@ export function WorkspaceBrowser({
   renderSlot,
   t,
 }: WorkspaceBrowserProps) {
+  const projections = useSyncExternalStore(workspaceProjections?.subscribe ?? noopSubscribe,
+    workspaceProjections?.getSnapshot ?? emptyProjections)
+  const hostActive = useSyncExternalStore(workspaceHostActive?.subscribe ?? noopSubscribe,
+    workspaceHostActive?.getSnapshot ?? activeHost)
+  const hostLabel = projection?.label
+  const combined = projections.length > 0
+  const embedded = combined || projection !== undefined
   const home = useHostInfo(info => info.home)
   const shortcuts = useShortcuts(rows => rows)
   const searchShortcut = shortcuts.find(row => row.id === 'session.search')
@@ -1073,7 +1101,7 @@ export function WorkspaceBrowser({
   const [query, setQuery] = useState('')
   const [searchExpanded, setSearchExpanded] = useState(false)
   const [revealSessionId, setRevealSessionId] = useState<SessionId | undefined>(undefined)
-  const normalizedQuery = sanitizeSearchQuery(query).trim()
+  const normalizedQuery = projection?.query ?? sanitizeSearchQuery(query).trim()
   const [remoteSearch, setRemoteSearch] = useState<RemoteSearchState>({
     query: '',
     status: 'idle',
@@ -1084,6 +1112,7 @@ export function WorkspaceBrowser({
   const searchInput = useRef<HTMLInputElement | null>(null)
   // Section-header ＋ opens the picker menu (same popover in wide and rail
   // states; the menu anchors on this button).
+  const [pickerMenuOpen, setPickerMenuOpen] = useState(false)
   const wsPickerOpen = shortcutState.addRequested
   const wsPlusRef = useRef<HTMLButtonElement>(null)
   const composingRef = useRef(false)
@@ -1096,6 +1125,7 @@ export function WorkspaceBrowser({
     setRevealSessionId(sessionId)
     setQuery('')
     setSearchExpanded(false)
+    projection?.clearSearch()
     open(sessionId)
   }
   const acknowledgeSessionReveal = (sessionId: SessionId): void => {
@@ -1263,9 +1293,21 @@ export function WorkspaceBrowser({
     })
   }
 
+  const addButton = (
+    <button
+      ref={wsPlusRef}
+      type="button"
+      className={css.iconButton}
+      aria-label={t('workspace.add')}
+      aria-keyshortcuts={addShortcut?.aria}
+      onClick={() => { if (combined) setPickerMenuOpen(open => !open); else requestAddWorkspace() }}
+    >
+      <IconProjectAddOutlineRegular size={wide ? 16 : 18} />
+    </button>
+  )
   return (
-    <div className={clsx(css.root, !wide && css.rail)}>
-      <div className={css.sectionHeader}>
+    <div className={projection === undefined ? clsx(css.root, !wide && css.rail) : css.projection} data-workspace-host={hostLabel}>
+      {projection === undefined && <div className={css.sectionHeader}>
         {wide && (
           <span className={clsx(css.sectionLabel, css.wide, searchExpanded && css.sectionLabelHidden)}>
             {groupBy === 'flat' ? t('section.sessions') : t('section.workspaces')}
@@ -1343,45 +1385,50 @@ export function WorkspaceBrowser({
           {/* Adding is the button's one action, so a composition with no
               picking affordance has nothing to offer here: the region hides the
               button rather than leaving a dead one in the header. */}
-          {directoryFlowAvailable && (
+          {combined ? (
+            <Menu
+              open={pickerMenuOpen}
+              onClose={() => { setPickerMenuOpen(false) }}
+              items={[
+                ...(directoryFlowAvailable ? [{ id: 'local', label: t('workspace.localHost') }] : []),
+                ...projections.map(host => ({ id: `host:${host.key}`, label: host.label })),
+              ]}
+              onSelect={(id) => {
+                setPickerMenuOpen(false)
+                if (id === 'local') requestAddWorkspace()
+                else projections.find(host => `host:${host.key}` === id)?.addWorkspace()
+              }}
+              anchor={addButton}
+              portal
+            />
+          ) : directoryFlowAvailable && (
             <Tooltip label={t('workspace.add')} shortcutKeys={addShortcut?.keys} side="bottom" delayMs={500}>
-              <button
-                ref={wsPlusRef}
-                type="button"
-                className={css.iconButton}
-                aria-label={t('workspace.add')}
-                aria-keyshortcuts={addShortcut?.aria}
-                onClick={() => {
-                  requestAddWorkspace()
-                }}
-              >
-                <IconProjectAddOutlineRegular size={wide ? 16 : 18} />
-              </button>
+              {addButton}
             </Tooltip>
           )}
         </div>
-        {/* Add flow + its error dialog (same package — direct composition). */}
-        <WorkspacePickFlow
-          t={t}
-          open={wsPickerOpen}
-          anchorRef={wsPlusRef}
-          useWorkspaces={useWorkspaces}
-          createWorkspace={createWorkspace}
-          useDirectoryFlow={useDirectoryFlow}
-          renderDirectoryFlow={owner => renderSlot('sidebar.workspaces.directoryFlow', owner)}
-          addOnly
-          onBusyChange={setDirectoryBusy}
-          side="right"
-          onPick={(workspaceId) => {
-            closeAddWorkspace()
-            startSession(workspaceId, { clearPreviousDraft: false })
-          }}
-          onClose={() => { closeAddWorkspace() }}
-        />
-      </div>
+      </div>}
+      {/* The picker stays mounted after it consumes the open request. */}
+      <WorkspacePickFlow
+        t={t}
+        open={wsPickerOpen}
+        anchorRef={projection?.pickerAnchor ?? wsPlusRef}
+        useWorkspaces={useWorkspaces}
+        createWorkspace={createWorkspace}
+        useDirectoryFlow={useDirectoryFlow}
+        renderDirectoryFlow={owner => renderSlot('sidebar.workspaces.directoryFlow', owner)}
+        addOnly
+        onBusyChange={setDirectoryBusy}
+        side="right"
+        onPick={(workspaceId) => {
+          closeAddWorkspace()
+          startSession(workspaceId, { clearPreviousDraft: false })
+        }}
+        onClose={() => { closeAddWorkspace() }}
+      />
 
       {/* The collapsed rail keeps search as its own 36px control. */}
-      {!wide && <div className={css.search}>
+      {projection === undefined && !wide && <div className={css.search}>
         <Tooltip label={t('search')} shortcutKeys={searchShortcut?.keys}>
           <button
             type="button"
@@ -1399,84 +1446,113 @@ export function WorkspaceBrowser({
 
       {/* Always-mounted seat keeps the region's flex slot while the list
           itself is wide-only. */}
-      <div className={css.listArea}>
-        {wide && (normalizedQuery !== ''
-          ? (
-            <SearchResults
-              usePanelInfo={usePanelInfo}
-              useSessions={useSessions}
-              useSessionStatus={useSessionStatus}
-              open={openSearchResult}
-              onUnarchive={onSessionUnarchive}
-              workspaces={workspaces}
-              archivedSessionIds={archivedSessionIds}
-              archivedFilter={archivedFilter}
-              query={normalizedQuery}
-              remote={remoteSearch}
-              resultLimit={searchResultLimit}
-              t={t}
-            />
-          )
-          : groupBy === 'flat'
+      <div className={projection === undefined ? css.listArea : css.projection}>
+        <div
+          className={combined ? css.list : css.projection}
+          role={combined && wide ? 'tree' : undefined}
+          aria-label={combined && wide ? t(normalizedQuery === '' ? 'section.sessions' : 'search.results.aria') : undefined}
+        >
+          {wide && (normalizedQuery !== ''
             ? (
-              <FlatList
+              <SearchResults
+                embedded={embedded}
+                hostActive={hostActive}
+                hostLabel={hostLabel}
                 usePanelInfo={usePanelInfo}
-                list={list}
-                sessionIds={orderedFlatSessionIds}
-                rowState={rowState}
-                onLeaveArchivedOnly={leaveArchivedOnly}
-                workspaceReady={workspaceReady}
-                animationResetKey={`${groupBy}/${orderBy}/${archivedFilter}`}
+                useSessions={useSessions}
                 useSessionStatus={useSessionStatus}
-                open={guardedOpen}
-                onSessionRenameRequest={requestSessionRename}
-                renderSlot={renderSlot}
-                setSessionOrder={saveSessionOrder}
-                revealSessionId={revealSessionId}
-                onSessionRevealed={acknowledgeSessionReveal}
+                open={openSearchResult}
+                onUnarchive={onSessionUnarchive}
+                workspaces={workspaces}
+                archivedSessionIds={archivedSessionIds}
+                archivedFilter={archivedFilter}
+                query={normalizedQuery}
+                remote={remoteSearch}
+                resultLimit={searchResultLimit}
                 t={t}
               />
             )
-            : (
-              <SessionTree
-                usePanelInfo={usePanelInfo}
-                list={list}
-                shortcuts={shortcuts}
-                useSessionStatus={useSessionStatus}
-                onSessionRenameRequest={requestSessionRename}
-                renderSlot={renderSlot}
-                workspaces={orderedWorkspaces}
-                ungroupedSessionIds={orderedUngroupedSessionIds}
-                workspaceReady={workspaceReady}
-                nestWorkspaces={groupBy === 'workspace-tree'}
-                animationResetKey={`${groupBy}/${orderBy}/${archivedFilter}`}
-                groupExpansion={groupExpansion}
-                setGroupExpanded={actions.setGroupExpanded}
-                setSessionOrder={saveSessionOrder}
-                rowState={rowState}
-                onLeaveArchivedOnly={leaveArchivedOnly}
-                startSession={startSession}
-                open={guardedOpen}
-                insertWorkspaceBefore={insertWorkspaceBefore}
-                revealSessionId={revealSessionId}
-                onSessionRevealed={acknowledgeSessionReveal}
-                home={home}
-                t={t}
-                onRenameRequest={(workspaceId, displayTitle) => {
-                  setRenameTarget({
-                    workspaceId,
-                    storedTitle: storedWorkspaces.find(w => w.workspaceId === workspaceId)?.title ?? displayTitle,
-                  })
-                  setRenameDraft(displayTitle)
-                  setRenameError(null)
-                }}
-                onDeleteRequest={(workspaceId, title) => {
-                  setDeleteTarget({ workspaceId, title })
-                  setDeleteError(null)
-                }}
-              />
-            ))}
+            : groupBy === 'flat'
+              ? (
+                <FlatList
+                  embedded={embedded}
+                  hostActive={hostActive}
+                  hostLabel={hostLabel}
+                  usePanelInfo={usePanelInfo}
+                  list={list}
+                  sessionIds={orderedFlatSessionIds}
+                  rowState={rowState}
+                  onLeaveArchivedOnly={leaveArchivedOnly}
+                  workspaceReady={workspaceReady}
+                  animationResetKey={`${groupBy}/${orderBy}/${archivedFilter}`}
+                  useSessionStatus={useSessionStatus}
+                  open={guardedOpen}
+                  onSessionRenameRequest={requestSessionRename}
+                  renderSlot={renderSlot}
+                  setSessionOrder={saveSessionOrder}
+                  revealSessionId={revealSessionId}
+                  onSessionRevealed={acknowledgeSessionReveal}
+                  t={t}
+                />
+              )
+              : (
+                <SessionTree
+                  embedded={embedded}
+                  hostActive={hostActive}
+                  hostLabel={hostLabel}
+                  usePanelInfo={usePanelInfo}
+                  list={list}
+                  shortcuts={shortcuts}
+                  useSessionStatus={useSessionStatus}
+                  onSessionRenameRequest={requestSessionRename}
+                  renderSlot={renderSlot}
+                  workspaces={orderedWorkspaces}
+                  ungroupedSessionIds={orderedUngroupedSessionIds}
+                  workspaceReady={workspaceReady}
+                  nestWorkspaces={groupBy === 'workspace-tree'}
+                  animationResetKey={`${groupBy}/${orderBy}/${archivedFilter}`}
+                  groupExpansion={groupExpansion}
+                  setGroupExpanded={actions.setGroupExpanded}
+                  setSessionOrder={saveSessionOrder}
+                  rowState={rowState}
+                  onLeaveArchivedOnly={leaveArchivedOnly}
+                  startSession={startSession}
+                  open={guardedOpen}
+                  insertWorkspaceBefore={insertWorkspaceBefore}
+                  revealSessionId={revealSessionId}
+                  onSessionRevealed={acknowledgeSessionReveal}
+                  home={home}
+                  t={t}
+                  onRenameRequest={(workspaceId, displayTitle) => {
+                    setRenameTarget({
+                      workspaceId,
+                      storedTitle: storedWorkspaces.find(w => w.workspaceId === workspaceId)?.title ?? displayTitle,
+                    })
+                    setRenameDraft(displayTitle)
+                    setRenameError(null)
+                  }}
+                  onDeleteRequest={(workspaceId, title) => {
+                    setDeleteTarget({ workspaceId, title })
+                    setDeleteError(null)
+                  }}
+                />
+              ))}
+          {projections.map(host => (
+            <div key={host.key} className={css.projection}>
+              {host.render({
+                wide, expandSidebar, projection: {
+                  label: host.label,
+                  query: normalizedQuery,
+                  pickerAnchor: wsPlusRef,
+                  clearSearch: () => { setQuery(''); setSearchExpanded(false) },
+                },
+              })}
+            </div>
+          ))}
+        </div>
       </div>
+
+      {projection !== undefined && renderSlot('sidebar.workspaces.overlay', {})}
 
       <Modal
         open={renameTarget !== null}

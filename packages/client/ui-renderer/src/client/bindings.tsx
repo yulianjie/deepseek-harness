@@ -4,6 +4,7 @@ import type {
   HostObservable,
   KeyedStandardSource,
   MaybeSnapshotSelectorHook,
+  RootSessionSelection,
   SlotRendererHost,
   SnapshotSelectorHook,
   StandardSourceBinding,
@@ -188,14 +189,17 @@ export function RootStandardProvider({ children }: { children: ReactNode }) {
 export function ScopeProvider({
   scope,
   children,
+  selection,
 }: {
   scope: 'session' | 'session-maybe'
   children: ReactNode
+  selection?: RootSessionSelection | undefined
 }) {
   const host = useHost()
   observableHook(host.scopeRevision)(value => value)
   const adapter = host.scope(scope)
   if (adapter === undefined) throw new SlotAssemblyError(`scope '${scope}' rendered without an installed adapter`)
-  const binding = observableHook(adapter.current)(value => value)
+  const source = selection === undefined ? adapter.current : adapter.bindingSource(selection.session)
+  const binding = observableHook(source)(value => value)
   return <ScopeBindingContext.Provider value={binding}>{children}</ScopeBindingContext.Provider>
 }

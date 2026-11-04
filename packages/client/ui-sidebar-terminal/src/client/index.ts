@@ -60,6 +60,7 @@ export function apply(ctx: Context): void {
       'web:macos': { code: 'Backquote', modifiers: ['control'] },
       'web:windows': { code: 'Backquote', modifiers: ['control'] },
     },
+    hostScoped: true,
     regions: ['page', 'editable', 'terminal'], modals: [],
     resolve: ({ target: element }) => {
       const target = ctx.sidebarRight.commandTarget(element)

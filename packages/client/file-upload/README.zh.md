@@ -42,7 +42,7 @@ kind: "package-reference"
 <details>
 <summary>实现细节——点击展开</summary>
 
-Client 插件提供 `ctx.fileUpload`。其 `upload()` 方法接收所属 Session 标识，组装原始路由请求，并为精确字节调用生成的 Remote。提供方只读取一次可选的 Cordis 启动前 `__DSH_FILE_UPLOAD__` 钩子。没有该钩子时，每个 Blob 或 stream 请求拥有一个短期 Worker，并在完成、失败或取消后释放。存在该钩子时，服务通过页面自己提供的 Fetch 载体发送请求体；Web Worker runtime 会通过请求帧转移 stream 请求体，再以带背压的分片形式交给 Host HTTP bridge。
+Client 插件提供 `ctx.fileUpload`。其 `upload()` 方法接收所属 Session 标识，组装原始路由请求，并为精确字节调用生成的 Remote。提供方在安装时选择 Host 运行时提供的 `fileUploadTransport`，未提供时读取可选的页面钩子 `__DSH_FILE_UPLOAD__`。两个载体均缺省时，每个 Blob 或 stream 请求使用一个短期 Worker，并在完成、失败或取消后释放。Web Worker 运行时通过请求帧转移 stream 请求体，再以带背压的分片形式交给 Host HTTP bridge。
 
 Host 插件提供 `ctx.fileUploads`。它拥有经过认证的流式路由、编码 Remote 兜底、命令凭证解析器与暂存凭证生命周期；编码准入、附件错误识别与字节存储仍由 `ctx.attachments` 提供。Host 调用方传入具有运行时所属上下文的 Agent；凭证表以该 Agent 的准确 Session 对象为键。Session Controller 注册可恢复休眠普通 Agent 的解析器，并在 prompt 准入时消费凭证。Prompt 投递通过可释放事务持有每个凭证绑定。成功投递提交事务前，释放会恢复原绑定；提交后，队列或历史观察会退休该凭证。
 

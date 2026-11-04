@@ -18,7 +18,7 @@ import type { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
 import { LOCALE_SETTINGS_NAMESPACE, LocaleSettingsSchema } from '../src/locale-settings.ts'
 
 /** Boot the plugin over a stub Host settings document. */
-async function bench(preference?: string) {
+async function bench(preference?: string, options?: Parameters<typeof apply>[1]) {
   const ctx = new Context()
   await ctx.plugin(SlotRegistry).await()
   let stored = preference
@@ -43,7 +43,7 @@ async function bench(preference?: string) {
   // The settings transport and the forwarded-event port the plugin injects.
   new TestRemote(ctx, { settings: { describe: describeRpc, mutate } })
   await ctx.plugin({ inject: [...settingsInject], apply: settingsApply }).await()
-  await ctx.plugin({ inject: [...inject], apply }).await()
+  await ctx.plugin({ inject: [...inject], apply }, options).await()
   return { ctx, locale: ctx.get('locale') as LocaleRuntime }
 }
 
@@ -71,6 +71,21 @@ describe('document language', () => {
     const { locale } = await bench()
     expect(locale.getLocale().active).toBe('zh')
     expect(langOf()).toBe('zh-CN')
+  })
+
+  it('keeps a Host pane locale out of the shell document and native bridge', async () => {
+    const bridge = { read: vi.fn(), onChange: vi.fn() }
+    vi.stubGlobal('__DSH_LOCALE__', bridge)
+    try {
+      const { ctx, locale } = await bench(undefined, { presentation: 'pane' })
+      expect(locale.getLocale().active).toBe('zh')
+      expect(langOf()).toBe('en')
+      expect(bridge.read).not.toHaveBeenCalled()
+      expect(bridge.onChange).not.toHaveBeenCalled()
+      await ctx.fiber.dispose()
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 
   it('follows a locale switch in both directions with BCP 47 tags', async () => {

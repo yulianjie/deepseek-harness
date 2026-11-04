@@ -2,7 +2,7 @@
 import { setImmediate } from 'node:timers/promises'
 import { afterEach, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
-import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
+import { createMemoryHostStorage, createSnapshotStore, type HostStorage } from '@deepseek-ai/dsh-client-store'
 import { RemoteError, type RemoteResult } from '@deepseek-ai/dsh-typert-protocol'
 import { streamMethod } from '@deepseek-ai/dsh-remote-mock'
 import { RemoteStream, type ClientRemote } from '@deepseek-ai/dsh-api-gateway/client'
@@ -60,8 +60,9 @@ function fixture() {
     cleanups.push(() => model.dispose())
     return model
   }
-  async function service(connected = false) {
+  async function service(connected = false, hostStorage?: HostStorage) {
     const ctx = new Context()
+    if (hostStorage !== undefined) ctx.provide('hostStorage', hostStorage)
     ctx.provide('remote', { ...gateway, terminal: remote } as never)
     ctx.provide('remote.terminal', remote)
     ctx.provide('connection', { generation: createSnapshotStore(connected ? {} : undefined) } as never)
@@ -333,6 +334,39 @@ it('closes an inactive restored tab by tab identity and retries saved close requ
   await h.service()
   await expect.poll(() => vi.mocked(h.remote.close).mock.calls.length).toBe(2)
   expect(h.remote.close).toHaveBeenCalledWith(sessionId, 'second')
+  await expect.poll(() => new TerminalCloseRequests().pending()).toEqual([])
+})
+
+it('replays a saved terminal close only on its owning Host when the remote terminal has the same IDs', async () => {
+  const browserStorage = storage()
+  const localRequest = { sessionId, id: info.id, title: 'Local terminal' }
+  new TerminalCloseRequests().save(localRequest)
+  new TerminalBindings().set(sessionId, 'same-content', 'local-binding' as WebTerminalId)
+  browserStorage.set('dsh.terminal.shell', '/bin/fish')
+
+  const remoteStorage = createMemoryHostStorage()
+  new TerminalBindings(remoteStorage).set(sessionId, 'same-content', info.id)
+  const remote = fixture()
+  vi.mocked(remote.remote.list).mockResolvedValue(success([info]))
+  vi.mocked(remote.remote.shells).mockResolvedValue(success([
+    info.shell, { name: 'fish', path: '/bin/fish', args: [] },
+  ]))
+  const { service } = await remote.service(true, remoteStorage)
+  const restored = service.view(sessionId, 'same-tab', 'same-content')
+  await restored.refresh()
+  expect(restored.state.getSnapshot().info?.id).toBe(info.id)
+  expect(remote.remote.close).not.toHaveBeenCalled()
+  expect(remote.remote.create).not.toHaveBeenCalled()
+  expect(new TerminalCloseRequests().pending()).toEqual([localRequest])
+  expect((await service.launchShells(sessionId, new AbortController().signal)).selectedShell).toBe('/bin/zsh')
+  service.selectShell('/bin/zsh')
+  expect(remoteStorage.getItem('dsh.terminal.shell')).toBe('/bin/zsh')
+  expect(browserStorage.get('dsh.terminal.shell')).toBe('/bin/fish')
+
+  const local = fixture()
+  await local.service(true)
+  expect(local.remote.close).toHaveBeenCalledExactlyOnceWith(sessionId, info.id)
+  expect(remote.remote.close).not.toHaveBeenCalled()
   await expect.poll(() => new TerminalCloseRequests().pending()).toEqual([])
 })
 

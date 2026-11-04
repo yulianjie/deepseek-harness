@@ -1,5 +1,6 @@
 /** Browser wire client: Remote transport and connection generations. */
 import type { Context } from '@deepseek-ai/cordis'
+import type { HostStorage } from '@deepseek-ai/dsh-client-store'
 import {
   ConnectionController,
   type ConnectionRecoveryConfig,
@@ -19,6 +20,12 @@ export type { ConnectionInteractions } from '../connect-protocol.ts'
 export type { ConnectionWebSocket, ConnectionWebSocketFactory } from './socket.ts'
 
 declare module '@deepseek-ai/cordis' {
+  interface Context {
+    /** Document resource access for a Host separate from the Desktop shell. */
+    hostPageAccess?: ClientHostPageAccess
+    /** Optional viewing state storage owned by this Host's Client runtime. */
+    hostStorage?: HostStorage
+  }
   interface Events {
     /**
      * A connection generation was established. Wire-derived caches must
@@ -55,6 +62,23 @@ export type {
   ClientConnectionRpc, ConnectionRpcFailure, ConnectionRpcResult,
 } from '../rpc.ts'
 export type { RpcFetch } from './rpc.ts'
+
+/** Host-bound access for authenticated routes outside the typed Gateway. */
+export interface ClientHostPageAccess {
+  /**
+   * Fetch an authorized application route from this Host.
+   * @param input - application route relative to the shell or resolved against it.
+   * @param init - method, cancellation, and optional request body.
+   * @returns the Host response.
+   */
+  fetch(input: string | URL, init?: RequestInit): Promise<Response>
+  /**
+   * Address a readable route for elements that cannot send a custom header.
+   * @param input - authorized application route relative to the shell or resolved against it.
+   * @returns an ephemeral URL that must not be persisted or sent to other Hosts.
+   */
+  resourceUrl(input: string | URL): string
+}
 
 /** Observable identity and Host facts for the active connection generation. */
 export interface ConnectionGenerationState {
@@ -99,12 +123,9 @@ export interface ClientTransportHooks {
    */
   loadBundle?(url: string): Promise<void>
   /**
-   * The transport owner declares the page owns the Host outright: the Host
-   * runs inside a worker this page spawned, so no other party can reach it and
-   * the loopback stand-in for "the owner's own machine" is vacuous.
-   * `ctx.connection.isLoopback` then reports the privileged surface reachable
-   * regardless of the page authority. Only a shell that assembles its own
-   * transport can set this; served pages never carry the global at all.
+   * Override the page authority when classifying this transport. Use true
+   * for a Host owned by the shell and false for a routed remote Host, even
+   * when the route goes through the shell's loopback listener.
    */
   ownsHost?: boolean
   /** Authenticated WebSocket factory; omission uses the browser API and its cookie jar. */
@@ -144,9 +165,8 @@ export interface ConnectionHandle {
   /** Forwarded-event participation selected at installation. */
   readonly interactions: ConnectionInteractions
   /**
-   * Whether the privileged surface is reachable: the page authority is
-   * loopback, the transport declares the page owns the Host
-   * ({@link ClientTransportHooks.ownsHost}), or the context is not a browser.
+   * Whether the carrier connects to a local Host. An explicit transport
+   * declaration takes precedence over browser location and non-browser defaults.
    */
   readonly isLoopback: boolean
   /** Current Remote event generation and the Host facts carried by its opening frame. */
@@ -265,7 +285,7 @@ export function installConnection(ctx: Context, options: ConnectionInstallOption
   const handle: ConnectionHandle = {
     interactions,
     openWebSocket: path => openConnectionWebSocket(path, transport?.createWebSocket, transport?.streamBaseUrl),
-    isLoopback: transport?.ownsHost === true || pageLocation === undefined || isLoopbackHostname(pageLocation.hostname),
+    isLoopback: transport?.ownsHost ?? (pageLocation === undefined || isLoopbackHostname(pageLocation.hostname)),
     generation: {
       getSnapshot: () => generation,
       subscribe: (listener) => {

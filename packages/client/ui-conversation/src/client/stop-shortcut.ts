@@ -60,6 +60,6 @@ export function installStopShortcut(
     }
     const disposers = [turnSource.subscribe(changed), binding.session.subscribe(changed), uiSession.sessionStatus.subscribe(changed)]
     unwatch = () => { for (const dispose of disposers) dispose() }
-  })
+  }, 'host')
   return () => { off(); reset() }
 }

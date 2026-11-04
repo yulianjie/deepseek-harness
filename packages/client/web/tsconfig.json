@@ -9,6 +9,15 @@
   ],
   "references": [
     {
+      "path": "./tsconfig.injections.json"
+    },
+    {
+      "path": "../../util/brand"
+    },
+    {
+      "path": "../connection/tsconfig.client.json"
+    },
+    {
       "path": "../store"
     },
     {
@@ -19,6 +28,9 @@
     },
     {
       "path": "../modules"
+    },
+    {
+      "path": "../shortcuts/tsconfig.client.json"
     },
     {
       "path": "../ui-slots"
@@ -33,10 +45,14 @@
       "path": "../ui-renderer"
     },
     {
+      "path": "../ui-session"
+    },
+    {
       "path": "../../host/webserver"
     }
   ],
   "exclude": [
-    "**/*.legacy.*"
+    "**/*.legacy.*",
+    "src/apply-injections.ts"
   ]
 }

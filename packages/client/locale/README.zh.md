@@ -33,6 +33,8 @@ kind: "package-reference"
 
 原生壳可以提供包含异步 `read()` 和 `onChange(locale)` 回调的 `__DSH_LOCALE__`。初始化在 Client 挂载前提供当前 Host 偏好和有序的系统语言列表。自动选择保持临时状态；只有设置中的选择会写入 `locale.preference`。每次加载页面都重新读取，避免重载后沿用过期的 preload 偏好。普通浏览器继续使用 navigator 检测和原有的设置作用域策略。
 
+在 `presentation: 'pane'` 模式下，新增 Host 将语言应用于自己的 slot 树。原生语言桥接与 `<html lang>` 由外层外壳负责。
+
 ### 注册字典
 
 用已合并进 `LocaleNamespaceMap` 的命名空间调用 `ctx.locale.register(ns, { zh, en })`；编译器会对照该命名空间的类型化键并集检查每个键，并要求两个内置 locale 齐全。消费方通过 `ctx.locale.bind(ns)` 或框架注入的 `t` 席位翻译。UI 已挂载后再注册的字典无需重新挂载即可生效。

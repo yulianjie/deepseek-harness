@@ -12,6 +12,33 @@ vi.mock('node:child_process', async (importOriginal) => {
 })
 
 describe('installer preparation preserves application dependencies', () => {
+  it.each(['win32', 'darwin'] as const)('packages the isolated Remote SSH edition without official settings on %s', async (platform) => {
+    const { localRemoteSshPackageEnvironment, validateDesktopPackageEnvironment } = await import('../scripts/desktop-package-environment.mjs')
+    const { createElectronBuilderConfig } = await import('../scripts/electron-builder-config.mjs')
+    const environment = localRemoteSshPackageEnvironment({
+      DSH_DESKTOP_APP_ID: 'com.deepseek.harness',
+      DSH_PACKAGING_PRESET: 'production',
+      DSH_DESKTOP_AUTO_UPDATE_ENV: 'production',
+      DSH_DESKTOP_MANDATORY_UPDATE_PROD_ORIGIN: 'https://policy.example.com',
+    })
+    expect(environment).not.toHaveProperty('DSH_PACKAGING_PRESET')
+    expect(environment).not.toHaveProperty('DSH_DESKTOP_AUTO_UPDATE_ENV')
+    expect(environment).not.toHaveProperty('DSH_DESKTOP_MANDATORY_UPDATE_PROD_ORIGIN')
+    validateDesktopPackageEnvironment(environment, { platform, arch: 'x64' }, { unsigned: true })
+    const config = createElectronBuilderConfig(environment, platform, 'x64')
+    expect(config).toMatchObject({
+      appId: 'io.github.yulianjie.dsh.remote-ssh',
+      productName: 'DeepSeek Harness Remote SSH',
+      artifactName: 'deepseek-harness-remote-ssh-${version}-${os}-${arch}-unsigned.${ext}',
+      protocols: [{ name: 'DeepSeek Harness Remote SSH', schemes: ['dsh-remote-ssh'] }],
+      publish: null,
+      extraMetadata: { name: 'dsh-remote-ssh-desktop', productName: 'DeepSeek Harness Remote SSH', dshDesktopRemoteSsh: true },
+    })
+    expect(config.extraMetadata).not.toHaveProperty('dshMandatoryUpdatePolicy')
+    expect(config.extraMetadata).not.toHaveProperty('dshDesktopUpdateChannel')
+    expect(config.extraResources).toContainEqual(expect.objectContaining({ to: 'remote-ssh' }))
+  })
+
   it.each(['win32', 'darwin'] as const)('rejects a missing production policy before signing on %s', async (platform) => {
     const { createElectronBuilderConfig } = await import('../scripts/electron-builder-config.mjs')
     expect(() => createElectronBuilderConfig({ DSH_DESKTOP_APP_ID: 'com.example.installer',

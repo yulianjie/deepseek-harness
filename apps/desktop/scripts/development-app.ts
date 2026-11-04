@@ -20,6 +20,15 @@ export interface DevelopmentAppOptions {
 function quote(value: string): string { return `'${value.replaceAll("'", "'\\''")}'` }
 
 /**
+ * Select Electron's application mode for a development launch.
+ * @param environment - caller environment, which may carry a Node-mode override.
+ * @returns a child environment with the Node-mode key absent, including Windows spelling variants.
+ */
+export function developmentElectronEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(environment).filter(([key]) => key.toUpperCase() !== 'ELECTRON_RUN_AS_NODE'))
+}
+
+/**
  * Prepare and register a disposable .app without changing the installed Electron package.
  * @param options - Current workspace, Electron binary, and private development locations.
  * @returns executable used by the supported desktop development launcher.
@@ -76,6 +85,7 @@ export function developmentLauncher(options: DevelopmentAppOptions, bundle: stri
   ]
   return [
     '#!/bin/sh',
+    'unset ELECTRON_RUN_AS_NODE',
     ...Object.entries(environment).map(([key, value]) => `export ${key}=${quote(value)}`),
     `cd ${quote(options.appRoot)}`,
     `exec ${args.map(quote).join(' ')} "$@"`,

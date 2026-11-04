@@ -33,6 +33,7 @@ export function registerSidebarShortcuts(shortcuts: Pick<Shortcuts, 'register' |
       'web:macos': { code: 'KeyB', modifiers: ['primary', 'shift'] },
       'web:windows': { code: 'KeyB', modifiers: ['primary', 'shift'] },
     },
+    hostScoped: true,
     regions: ['page', 'editable', 'terminal'], modals: [],
     resolve: () => {
       const target = sidebar.commandTarget(null)
@@ -48,6 +49,7 @@ export function registerSidebarShortcuts(shortcuts: Pick<Shortcuts, 'register' |
       label: () => t(kind === 'split' ? 'dock.splitPane' : 'command.fullscreen'), aliases: [kind, 'panel'],
       defaults: { 'desktop:macos': binding, 'desktop:windows': binding, 'desktop:linux': binding,
         'web:macos': binding, 'web:windows': binding },
+      hostScoped: true,
       regions: ['page', 'editable', 'terminal'], modals: [],
       resolve: ({ target: element }) => {
         const target = sidebar.focusedTarget(element)
@@ -69,6 +71,7 @@ export function registerSidebarShortcuts(shortcuts: Pick<Shortcuts, 'register' |
       id: `page.${kind}` as ShortcutCommandId, label: () => t(`command.${kind}`), aliases: [kind, 'page'],
       defaults: { 'desktop:macos': desktop, 'desktop:windows': desktop, 'desktop:linux': desktop,
         'web:windows': web, ...(kind === 'close' ? { 'web:macos': web } : {}) },
+      hostScoped: true,
       regions: ['page', 'editable', 'terminal'], modals: kind === 'close' ? ['settings', 'shortcuts', 'other'] : [],
       resolve: ({ target: element, source, modal }) => {
         if (kind === 'close' && modal !== null) {

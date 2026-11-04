@@ -115,7 +115,7 @@ export function apply(ctx: Context): void {
   // One viewing-store instance, created here as ui-layout does for its layout
   // store: the browser declares the handle, and the UiWorkspace service writes
   // view order through the same instance the renderer hands the browser.
-  const viewHandle = createWorkspaceViewStore()
+  const viewHandle = createWorkspaceViewStore(ctx.get('hostStorage'))
   const viewInstance = viewHandle.create()
   const viewStore: typeof viewHandle = { ...viewHandle, create: () => viewInstance }
   const rowToast = createSnapshotStore<RowToastState | null>(null)
@@ -134,6 +134,14 @@ export function apply(ctx: Context): void {
   })
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'ui-workspace: dictionaries')
   const shortcutControls = createWorkspaceShortcutControls()
+  const sidebar = ctx.get('hostWorkspaceSidebar')
+  const focusHost = ctx.get('focusHostWorkspace')
+  const hostForeground = ctx.get('hostForeground')
+  const projectedHost = sidebar === undefined && focusHost !== undefined
+  if (projectedHost) ctx.provide('hostWorkspaceActions', {
+    startSession: () => { uiWorkspace.startSession() },
+    addWorkspace: shortcutControls.add,
+  })
 
   const searchSessions: WorkspaceBrowserInjected['searchSessions'] = async (query, signal) => {
     const result = await sessions.search(query, signal)
@@ -155,6 +163,7 @@ export function apply(ctx: Context): void {
   const pickerFlowSource = flowSource('conversation.hero.workspace.directoryFlow')
   const openSession: WorkspaceBrowserInjected['open'] = (sessionId) => {
     uiWorkspace.openSession(sessionId)
+    focusHost?.()
   }
   // Registry-global sets as Sets, rebuilt only when the Workspace snapshot changes.
   const pinnedSet = derive(workspaces.list, snapshot => new Set<SessionId>(snapshot.pinnedSessionIds))
@@ -264,7 +273,10 @@ export function apply(ctx: Context): void {
   const browserInjected = (): WorkspaceBrowserInjected => ({
     // Explicit group actions keep their target; unscoped New Session inherits
     // the current Session Workspace before the recent-Workspace fallback.
-    startSession: (workspaceId, options) => { uiWorkspace.startSession(workspaceId, options) },
+    startSession: (workspaceId, options) => {
+      focusHost?.()
+      uiWorkspace.startSession(workspaceId, options)
+    },
     open: openSession,
     searchSessions,
     searchResultLimit: sessions.searchResultLimit,
@@ -281,6 +293,8 @@ export function apply(ctx: Context): void {
     requestAddWorkspace: shortcutControls.add,
     closeAddWorkspace: shortcutControls.closeAdd,
     setDirectoryBusy: shortcutControls.directoryBusy,
+    ...(sidebar === undefined ? {} : { workspaceProjections: sidebar.projections }),
+    ...(hostForeground === undefined ? {} : { workspaceHostActive: hostForeground }),
     hooks: { directoryFlow: browserFlowSource, hostInfo, workspaceShortcuts: shortcutControls.state, shortcuts: ctx.shortcuts.catalog },
   })
   const pickerInjected = (): WorkspacePickerInjected => ({
@@ -294,6 +308,7 @@ export function apply(ctx: Context): void {
       name: 'sidebar.workspaces',
       children: {
         'sidebar.workspaces.directoryFlow': { kind: 'single', scope: 'root' },
+        'sidebar.workspaces.overlay': { kind: 'list', scope: 'root' },
         // Every row entry reads the menu's open state through a hook bound
         // from the row's render occurrence (the owner passes the state pair
         // as hookContext).
@@ -326,15 +341,16 @@ export function apply(ctx: Context): void {
   })
   // The surfaces the actions raise live in the frame-wide layer: they must
   // outlive the row menu the action sat in.
-  ctx.slots.inject('shell.overlay', function* () {
+  const overlay = projectedHost ? 'sidebar.workspaces.overlay' : 'shell.overlay'
+  ctx.slots.inject(overlay, function* () {
     yield ctx.slots.register({
-      name: 'shell.overlay', id: 'workspace.session-rename', locale: NS, inject: renameDialogInjected,
+      name: overlay, id: 'workspace.session-rename', locale: NS, inject: renameDialogInjected,
     }, SessionRenameDialog)
     yield ctx.slots.register({
-      name: 'shell.overlay', id: 'workspace.session-archive', locale: NS, inject: archiveConfirmInjected,
+      name: overlay, id: 'workspace.session-archive', locale: NS, inject: archiveConfirmInjected,
     }, SessionArchiveConfirmDialog)
     yield ctx.slots.register({
-      name: 'shell.overlay', id: 'workspace.row-toast', inject: rowToastInjected,
+      name: overlay, id: 'workspace.row-toast', inject: rowToastInjected,
       children: { 'workspace.toast': { kind: 'keyed', scope: 'root' } },
     }, RowActionToast)
   })

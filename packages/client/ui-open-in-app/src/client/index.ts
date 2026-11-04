@@ -48,6 +48,7 @@ export const inject = ['sessions', 'slots', 'locale', 'remote', 'remote.session'
  * @param ctx - client root context.
  */
 export function apply(ctx: ClientContext): void {
+  if (ctx.get('hostPageAccess') !== undefined) return
   const controller = new OpenInAppController()
   void controller.load()
   const paths = new OpenInAppPathController(ctx.remote)
@@ -69,6 +70,7 @@ export function apply(ctx: ClientContext): void {
       'web:macos': { code: 'KeyO', modifiers: ['primary', 'shift'] },
       'web:windows': { code: 'KeyO', modifiers: ['primary', 'shift'] },
     },
+    hostScoped: true,
     regions: ['page', 'editable'], modals: [],
     resolve: () => {
       if (controller.operation.getSnapshot().phase === 'busy') return { status: 'blocked', reason: t('shortcut.busy') }

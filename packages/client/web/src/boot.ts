@@ -11,6 +11,8 @@ import type {
 } from '@deepseek-ai/dsh-client-modules/client'
 import { bootClient } from './boot-client.ts'
 import { BootPage } from './boot-page.ts'
+import { installDesktopSsh } from './desktop-ssh.ts'
+import { provideHostRuntimeFactory } from './host-runtime-factory.ts'
 import { mountClient } from './mount.ts'
 import { getStaticModules } from './seed.ts'
 import { installWindowDragRecall } from './window-drag/recall.ts'
@@ -68,9 +70,10 @@ export class AppWebEntry {
       const transport = (globalThis as {
         __DSH_TRANSPORT__?: { loadBundle?: ClientModuleCreateOptions['loadBundle'] }
       }).__DSH_TRANSPORT__
+      const staticModules = getStaticModules()
       this.modules = moduleLoader.create({
         boot: win.__DSH_BOOT__,
-        staticModules: getStaticModules(),
+        staticModules,
         ...transport?.loadBundle === undefined ? {} : { loadBundle: transport.loadBundle },
         ...this.seams,
       })
@@ -79,6 +82,7 @@ export class AppWebEntry {
       const prefetching = this.prefetchImmediateTier()
       const ctx = new Context()
       this.ctx = ctx
+      provideHostRuntimeFactory(ctx, this.modules)
       this.page.setTotal(this.manifest.plugins.length)
       await prefetching
       await bootClient({
@@ -89,6 +93,7 @@ export class AppWebEntry {
           if (onFailure === undefined || state !== 'failed') this.page.setState(name, state)
         },
       })
+      await installDesktopSsh(ctx, staticModules, globalThis)
       // The shell owns the one watcher that keeps Electron's window drag rects in
       // step with the rows that own them (electron#32341), so no chrome row has to
       // know that trap. It installs before the first mount, so the surface the

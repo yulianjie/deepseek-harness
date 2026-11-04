@@ -602,6 +602,26 @@ describe('UiSession status', () => {
     bench.list.update((draft) => { draft.phase = 'ready' })
     expect(service.sessionStatus.getSnapshot().has(id)).toBe(false)
   })
+
+  it('keeps a retained background Session unread until its Host is visible', () => {
+    const ctx = new Context()
+    const foreground = createSnapshotStore(false)
+    ctx.reflect.provide('hostForeground', foreground)
+    const bench = createSessionsBench(ctx)
+    const id = sessionId('s1')
+    bench.binding(id)
+    bench.setMainView(id, 1)
+    const service = createUiSession(ctx, bench)
+
+    bench.emitStatus(id, true)
+    bench.emitStatus(id, false)
+    expect(service.sessionStatus.getSnapshot().get(id)?.completionUnread).toBe(true)
+    expect(service.adapter.current.getSnapshot().key).toBe(id)
+
+    foreground.set(true)
+    expect(service.sessionStatus.getSnapshot().get(id)?.completionUnread).toBe(false)
+    expect(service.adapter.current.getSnapshot().key).toBe(id)
+  })
 })
 
 describe('UiSession pending interactions', () => {

@@ -208,6 +208,7 @@ export function dynamicCordisContext(ctx: Context, env: DynamicCordisGuardEnv): 
     )
   }
   const readService = (name: string, requireDeclaration: boolean): unknown => {
+    if (name === 'hostRuntimeFactory') return rejectGuard(env, 'Host runtime composition is reserved for the local shell')
     if (requireDeclaration && !declared.has(name)) return denyRead(name)
     const service = denyContext(ctx.get(name), name, env)
     if (service === null || (typeof service !== 'object' && typeof service !== 'function')) return service
@@ -234,6 +235,7 @@ export function dynamicCordisContext(ctx: Context, env: DynamicCordisGuardEnv): 
     },
     has: (_target, prop) => prop === 'get'
       || (typeof prop === 'string'
+        && prop !== 'hostRuntimeFactory'
         && ((CTX_VERBS.has(prop) && (!TIMER_VERBS.has(prop) || declared.has('timer'))) || declared.has(prop))),
   }) as Context
 }

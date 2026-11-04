@@ -163,10 +163,13 @@ interface FileUploadTransport {
 export class FileUploadRuntime extends Service implements FileUploadService {
   private readonly transport: FileUploadTransport
 
-  /** @param ctx - providing Client context. */
-  constructor(ctx: Context) {
+  /**
+   * @param ctx - providing Client context.
+   * @param transport - Host carrier, or absence to use the page's upload carrier.
+   */
+  constructor(ctx: Context, transport?: ClientFileUploadHooks) {
     super(ctx, 'fileUpload')
-    const hook = (globalThis as ClientFileUploadGlobal).__DSH_FILE_UPLOAD__
+    const hook = transport ?? (globalThis as ClientFileUploadGlobal).__DSH_FILE_UPLOAD__
     this.transport = hook === undefined ? workerTransport() : customTransport(hook.fetch)
   }
 

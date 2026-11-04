@@ -3,8 +3,9 @@ import type { AfterPackContext, BeforePackContext } from 'app-builder-lib'
 /** Electron-builder fields asserted by the Desktop release tests. */
 export interface DesktopElectronBuilderConfig {
   readonly appId: string
+  readonly productName: string
   readonly artifactName: string
-  readonly protocols: readonly [{ readonly name: 'DeepSeek Harness'; readonly schemes: readonly ['dsh'] }]
+  readonly protocols: readonly [{ readonly name: string; readonly schemes: readonly ['dsh' | 'dsh-remote-ssh'] }]
   readonly directories: {
     readonly output: string
   }
@@ -13,12 +14,16 @@ export interface DesktopElectronBuilderConfig {
     { readonly from: string, readonly to: 'dsh', readonly filter: readonly ['**/*'] },
     { readonly from: string, readonly to: 'dsh/node_modules', readonly filter: readonly ['**/*'] },
   ]
-  readonly extraMetadata: { readonly dshDesktopAppId: string }
+  readonly extraMetadata: {
+    readonly dshDesktopAppId: string
+    readonly name?: string
+    readonly productName?: string
+    readonly dshDesktopRemoteSsh?: true
+  }
   readonly asarUnpack: readonly string[]
   readonly extraResources: readonly [
     { readonly from: string, readonly to: 'runtime' },
-    { readonly from: string, readonly to: 'icon.png' },
-    ...{ readonly from: string, readonly to: 'tray.ico' }[],
+    ...{ readonly from: string, readonly to: 'remote-ssh' | 'icon.png' | 'tray.ico' }[],
   ]
   readonly mac: {
     readonly extendInfo: { readonly NSMicrophoneUsageDescription: string }

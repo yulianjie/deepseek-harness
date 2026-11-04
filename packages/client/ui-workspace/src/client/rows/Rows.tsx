@@ -216,8 +216,11 @@ function rowHalf(e: { clientY: number; currentTarget: HTMLElement }): 'before' |
  * @param props.t - the browser root's locale seat.
  * @returns the row element.
  */
-export function ProjectRowItem({ group, containsCurrentDescendant = false, onToggle, onCreate, actions, drag, home, newShortcut, t }: {
+export function ProjectRowItem({
+  group, containsCurrentDescendant = false, onToggle, onCreate, actions, drag, home, hostLabel, newShortcut, t,
+}: {
   group: GroupNode
+  hostLabel?: string | undefined
   newShortcut?: ShortcutCatalogEntry | undefined
   containsCurrentDescendant?: boolean
   onToggle: () => void
@@ -265,6 +268,7 @@ export function ProjectRowItem({ group, containsCurrentDescendant = false, onTog
       <span className={css.projectText}>
         <span className={css.title}>{label}</span>
       </span>
+      {hostLabel !== undefined && <span className={css.hostLabel} title={hostLabel}>{hostLabel}</span>}
       <span className={css.rowActions}>
         {actions !== undefined && (
           <Menu
@@ -469,8 +473,9 @@ function SessionHoverContent({ node, now, renderSlot, t }: {
  * @param props.t - Workspace-browser translation seat.
  * @returns the result row.
  */
-export function SearchResultItem({ result, currentId, onOpen, onUnarchive, t }: {
+export function SearchResultItem({ result, currentId, onOpen, onUnarchive, hostLabel, t }: {
   result: SearchResultNode
+  hostLabel?: string | undefined
   currentId: string | undefined
   onOpen: (id: SearchResultNode['id']) => void
   onUnarchive: (id: SearchResultNode['id']) => void
@@ -514,6 +519,7 @@ export function SearchResultItem({ result, currentId, onOpen, onUnarchive, t }: 
       </span>
       <span className={css.searchResultMeta}>
         <span className={css.searchResultWorkspace}>{result.workspace || t('group.ungrouped')}</span>
+        {hostLabel !== undefined && <span className={css.hostLabel} title={hostLabel}>{hostLabel}</span>}
         {result.snippet !== undefined && (
           <span className={css.searchResultSnippet}>{result.snippet}</span>
         )}
@@ -543,9 +549,10 @@ export function SearchResultItem({ result, currentId, onOpen, onUnarchive, t }: 
  * @returns the session row.
  */
 export function SessionNodeItem({
-  node, currentId, now, onOpen, onRenameRequest, renderSlot, onReveal, drag, t,
+  node, currentId, now, onOpen, onRenameRequest, renderSlot, onReveal, drag, hostLabel, t,
 }: {
   node: SessionNode
+  hostLabel?: string | undefined
   currentId: string | undefined
   now: number
   onOpen: (id: SessionNode['id']) => void
@@ -643,6 +650,7 @@ export function SessionNodeItem({
       >
         {title}
       </span>
+      {hostLabel !== undefined && <span className={css.hostLabel} title={hostLabel}>{hostLabel}</span>}
       {/* A blank New Session row is a provisional placeholder: nothing has
           happened in it yet, so a "now" timestamp and the row verbs
           (rename/fork/archive) would all act on content that does not

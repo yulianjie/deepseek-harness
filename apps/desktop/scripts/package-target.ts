@@ -10,7 +10,10 @@ import {
 } from './desktop-auto-update-environment.mjs'
 import { desktopArtifactOutput, desktopTargetBuildPaths } from './desktop-build-paths.mjs'
 import { packageMacOSArtifacts, type DesktopPrepackagedArtifact } from './package-macos.ts'
-import { loadDesktopPackageEnvironment, localMacOSPackageEnvironment, validateDesktopPackageEnvironment } from './desktop-package-environment.mjs'
+import {
+  loadDesktopPackageEnvironment, localMacOSPackageEnvironment, localRemoteSshPackageEnvironment,
+  validateDesktopPackageEnvironment,
+} from './desktop-package-environment.mjs'
 import { createPackagingRun, recordPackagingEvent } from './packaging-run.mjs'
 import { withWindowsSigningStage } from './windows-signing-stage.mjs'
 import { prepareWindowsSignatureCacheDirectory, resolveWindowsSignatureCacheDirectory } from './windows-signature-cache-directory.mjs'
@@ -24,6 +27,7 @@ import { suggestDesktopBuildVersion } from './desktop-build-version-discovery.ts
 import { desktopBuildCommitEnvironment, readDesktopBuildCommit, resolveDesktopBuildCommit } from './desktop-build-commit.mjs'
 import { requireDesktopToolchain } from './desktop-toolchain-preflight.ts'
 import { withMacOSNotarizationProxy } from './macos-notarization-proxy.ts'
+import { REMOTE_SSH_DESKTOP } from '../src/remote-ssh-identity.ts'
 
 const APP_ROOT = resolve(import.meta.dirname, '..')
 const REPOSITORY_ROOT = resolve(APP_ROOT, '..', '..')
@@ -338,16 +342,19 @@ async function resolveRequestedBuildVersion(
 }
 
 async function main(): Promise<void> {
-  const invocation = parseDesktopPackageInvocation(process.argv.slice(2))
+  const requested = parseDesktopPackageInvocation(process.argv.slice(2))
+  const remoteSsh = process.env.DSH_DESKTOP_REMOTE_SSH === '1'
+  if (remoteSsh && requested.skipNotarization) throw new Error('desktop package: the Remote SSH edition does not sign or notarize packages')
+  const invocation = remoteSsh ? { ...requested, unsigned: true } : requested
   const { target } = invocation
   if (invocation.skipNotarization) {
     process.stdout.write('desktop package: skipping notarization and stapling; internal debugging only, not qualified for distribution or update publishing\n')
   }
-  const environment = target.platform === 'darwin' && invocation.unsigned
-    ? localMacOSPackageEnvironment()
-    : loadDesktopPackageEnvironment(target.platform, process.env, APP_ROOT, {
-      unsigned: invocation.unsigned, prepareOnly: invocation.prepareOnly,
-    })
+  const environment = remoteSsh ? localRemoteSshPackageEnvironment()
+    : target.platform === 'darwin' && invocation.unsigned ? localMacOSPackageEnvironment()
+      : loadDesktopPackageEnvironment(target.platform, process.env, APP_ROOT, {
+        unsigned: invocation.unsigned, prepareOnly: invocation.prepareOnly,
+      })
   const productVersion = packageVersion(join(APP_ROOT, 'package.json'), 'desktop package')
   // Release settings come from the selected configuration files, so the version this run publishes is an
   // argument; the environment variable below only carries it to the child processes that build.
@@ -356,10 +363,12 @@ async function main(): Promise<void> {
   if (invocation.check) {
     validateDesktopPackageEnvironment(environment, target, invocation)
     await requireDesktopToolchain(target.platform, environment)
-    process.stdout.write(`desktop package: ${target.name} would publish ${buildVersion}; local configuration and toolchain valid, signing and notarization were not attempted\n`)
+    const action = remoteSsh ? 'build unsigned Remote SSH' : 'publish'
+    process.stdout.write(`desktop package: ${target.name} would ${action} ${buildVersion}; local configuration and toolchain valid, signing and notarization were not attempted\n`)
     return
   }
-  process.stdout.write(`desktop package: ${target.name} publishes ${buildVersion}${buildVersion === productVersion ? '' : ` for product version ${productVersion}`}\n`)
+  const action = remoteSsh ? 'builds unsigned Remote SSH' : 'publishes'
+  process.stdout.write(`desktop package: ${target.name} ${action} ${buildVersion}${buildVersion === productVersion ? '' : ` for product version ${productVersion}`}\n`)
   const packaged = readDesktopBuildCommit(REPOSITORY_ROOT)
   Object.assign(environment, desktopBuildCommitEnvironment(packaged))
   const secrets = Object.entries(environment).filter(([name]) => /KEY|SECRET|TOKEN|PASSWORD|APPLE_ID/iu.test(name)).map(([, value]) => value ?? '')
@@ -401,7 +410,7 @@ async function main(): Promise<void> {
   if (success && target.platform === 'darwin' && !invocation.directory && !invocation.prepareOnly) {
     const paths = desktopTargetBuildPaths(target.name)
     const output = desktopArtifactOutput(paths, invocation)
-    const filename = `deepseek-harness-${buildVersion}-mac-${target.arch}${output.suffix}.dmg`
+    const filename = `${remoteSsh ? REMOTE_SSH_DESKTOP.artifactPrefix : 'deepseek-harness'}-${buildVersion}-mac-${target.arch}${output.suffix}.dmg`
     console.log(`DMG: ${join(output.directory, filename)}`)
   }
 }

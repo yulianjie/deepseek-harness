@@ -1,5 +1,6 @@
 /** Unfinished close requests survive reload independently of the removed sidebar tabs. */
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
+import type { HostStorage } from '@deepseek-ai/dsh-client-store'
 import type { WebTerminalId } from '../types.ts'
 
 /** An explicit cleanup request; no process or open-tab metadata is mirrored here. */
@@ -15,12 +16,14 @@ const PREFIX = 'dsh.terminal.close.v1.'
 export class TerminalCloseRequests {
   private readonly requests = new Map<WebTerminalId, TerminalCloseRequest>()
 
-  constructor() {
+  /** @param hostStorage - Host runtime storage, or absence for ordinary browser storage. */
+  constructor(private readonly hostStorage?: HostStorage) {
     try {
-      if (typeof localStorage === 'undefined') return
-      for (let index = 0; index < localStorage.length; index++) {
-        const key = localStorage.key(index)
-        if (key?.startsWith(PREFIX)) this.load(key)
+      const storage = this.storage
+      if (storage === undefined) return
+      for (let index = 0; index < storage.length; index++) {
+        const key = storage.key(index)
+        if (key?.startsWith(PREFIX)) this.load(storage, key)
       }
     } catch (error) { console.error('Terminal cleanup recovery failed:', error) }
   }
@@ -38,7 +41,7 @@ export class TerminalCloseRequests {
   save(request: TerminalCloseRequest): void {
     this.requests.set(request.id, request)
     try {
-      if (typeof localStorage !== 'undefined') localStorage.setItem(PREFIX + request.id, JSON.stringify(request))
+      this.storage?.setItem(PREFIX + request.id, JSON.stringify(request))
     } catch (error) { console.error('Terminal cleanup persistence failed:', error) }
   }
 
@@ -49,13 +52,15 @@ export class TerminalCloseRequests {
   remove(id: WebTerminalId): void {
     this.requests.delete(id)
     try {
-      if (typeof localStorage !== 'undefined') localStorage.removeItem(PREFIX + id)
+      this.storage?.removeItem(PREFIX + id)
     } catch (error) { console.error('Terminal cleanup persistence failed:', error) }
   }
 
-  private load(key: string): void {
+  private get storage(): HostStorage | undefined { return this.hostStorage ?? globalThis.localStorage }
+
+  private load(storage: HostStorage, key: string): void {
     try {
-      const raw = localStorage.getItem(key)
+      const raw = storage.getItem(key)
       if (raw === null) return
       const parsed: unknown = JSON.parse(raw)
       if (!isRequest(parsed) || key !== PREFIX + parsed.id) throw new Error('Invalid terminal cleanup request')

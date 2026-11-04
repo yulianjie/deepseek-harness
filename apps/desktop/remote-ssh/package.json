@@ -1,0 +1,5 @@
+{
+  "name": "dsh-remote-host-ssh",
+  "private": true,
+  "type": "module"
+}

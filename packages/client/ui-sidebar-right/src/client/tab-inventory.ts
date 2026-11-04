@@ -1,5 +1,5 @@
 /** Metadata inventory of saved and adopted layouts without mounting their content. */
-import { createSnapshotStore, type ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
+import { createSnapshotStore, resolveHostStorage, type HostStorage, type ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { TabId, TabRecord } from '@deepseek-ai/dsh-client-ui-dockkit'
 import { readSidebarLayout, sidebarPersistence } from './persistence.ts'
@@ -19,15 +19,19 @@ export class SidebarTabInventory {
   /** Read-only metadata observable shared with content providers. */
   readonly source: ObservableSnapshot<readonly SidebarRightOpenTab[]> = this.snapshot
 
-  /** Read saved layouts once before the root service is published. */
-  constructor() {
+  /**
+   * Read saved layouts once before the root service is published.
+   * @param backend - Host backend, or absence for ordinary browser storage.
+   */
+  constructor(backend?: HostStorage) {
     try {
-      if (typeof localStorage === 'undefined') return
-      const keys = Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index))
+      const storage = resolveHostStorage(backend)
+      if (storage === undefined) return
+      const keys = Array.from({ length: storage.length }, (_, index) => storage.key(index))
       for (const key of keys) {
         if (key === null || !key.startsWith(`${sidebarPersistence}.`)) continue
         const sessionId = key.slice(sidebarPersistence.length + 1) as SessionId
-        const saved = readSidebarLayout(sessionId)
+        const saved = readSidebarLayout(sessionId, storage)
         if (saved !== undefined) this.sessions.set(sessionId, Object.values(saved.layout.tabs).map(tab => ({
           sessionId, tabId: tab.id, kind: tab.kind, contentId: tab.contentId,
         })))

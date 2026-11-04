@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createSnapshotStore, defineStore, shallowEqual } from '../src/index.ts'
+import { createMemoryHostStorage, createSnapshotStore, defineStore, shallowEqual } from '../src/index.ts'
 
 interface State {
   a: { n: number }
@@ -254,6 +254,28 @@ describe('defineStore', () => {
     expect(backing.has('spec.chat.s1')).toBe(false)
     expect(backing.has('spec.chat.s2')).toBe(true)
     expect(backing.has('spec.chat')).toBe(true)
+  })
+
+  it('restores matching Session IDs from their own Host storage', () => {
+    const localStorage = createMemoryHostStorage()
+    vi.stubGlobal('localStorage', localStorage)
+    const remoteStorage = createMemoryHostStorage()
+    const spec = {
+      init: () => ({ draft: '' }),
+      persist: 'spec.chat',
+      actions: { setDraft: (draft: { draft: string }, text: string) => { draft.draft = text } },
+    }
+    const local = defineStore(spec)
+    const remote = defineStore(spec, remoteStorage)
+    local.create('same-id').actions.setDraft('local draft')
+    expect(remote.create('same-id').getSnapshot().draft).toBe('')
+    remote.create('same-id').actions.setDraft('remote draft')
+    expect(local.create('same-id').getSnapshot().draft).toBe('local draft')
+    expect(remote.create('same-id').getSnapshot().draft).toBe('remote draft')
+    expect(remoteStorage.key(0)).toBe('spec.chat.same-id')
+    remote.create('same-id').clearPersisted()
+    expect(remoteStorage.length).toBe(0)
+    expect(localStorage.getItem('spec.chat.same-id')).toBe('{"draft":"local draft"}')
   })
 
   it('clearPersisted is a no-op without a persist declaration or without storage', () => {

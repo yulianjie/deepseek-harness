@@ -31,6 +31,8 @@ Mount this plugin in a web client whose composition also mounts the host runner 
 
 A browser half is written in plain JavaScript — no JSX, no TypeScript, no module imports — and runs as an async function. It receives a fixed set of names — `React`, `console`, `styles`, and `host` — while browser globals like `fetch` and `setTimeout` are unavailable. The plugin it returns can use the lifecycle verbs and only the services it declared in its own `inject`. Calling `host.call(method, args)` from the loaded half reaches its own host half. A crash that happens while React renders the loaded half is reported to the host with the slot, whether the crash removed the entry, and a message written for the author.
 
+Host runtime composition is a local shell capability. The dynamic browser facade withholds `hostRuntimeFactory` from dynamic packages.
+
 ### What the run surface offers
 
 A run surface can answer a pending host request — approving it, optionally covering future versions of the same plugin, or declining it — and can start a definition at the user's own gesture, which authorizes it. Each definition has at most one in-flight activity, so an affordance built on that state survives a remount. What the surface shows about this page is page-local: the last render crash per package, why this page's own attempt failed, and whether a package is loaded here — never the host's view of what is running.

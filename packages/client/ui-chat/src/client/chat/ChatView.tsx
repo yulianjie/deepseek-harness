@@ -11,7 +11,8 @@ import {
   Button, IconChevronDownOutlineRegular, MarkdownDelegateProvider, Modal,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import { isAtOrOutside } from '../contract/group-tree.ts'
-import type { ChatFlowHookContext, ChatViewSlotProps, OpenFileOptions } from '../contract/slots.ts'
+import type { PropsHooks } from '@deepseek-ai/dsh-client-ui-slots'
+import type { ChatFlowHookContext, ChatViewSlotProps, HostMediaHooks, OpenFileOptions } from '../contract/slots.ts'
 import type { ChatSnapshot } from '../contract/snapshot.ts'
 import { TurnNavigator } from './TurnNavigator.tsx'
 import { mergeTurnRailItems } from './turn-rail-items.ts'
@@ -60,8 +61,8 @@ const MOTION_TAIL_MS = 800
 export function ChatView({
   useSession, useChat, useConversation, useSessions, renderSlot,
   sessionId, openFile, openExternalLink, loadOlder, loadThrough, loadImage, inspectCall, chatScroll, forkAt, fileMentions,
-  usePresentation, useProjection, t,
-}: ChatViewSlotProps) {
+  usePresentation, useProjection, t, resourceUrl, mediaGeneration,
+}: ChatViewSlotProps & { mediaGeneration?: unknown }) {
   const order = useChat(s => s.order)
   const groupedEntries = useConversation(snapshot => snapshot.views.grouped('chat')?.entries)
   const entries = useMemo<readonly RenderEntry[]>(() => groupedEntries
@@ -84,12 +85,15 @@ export function ChatView({
   // Workspace root off the session list row: path summaries display relative to it.
   const cwd = useSessions(s => s.byId[sessionId]?.cwd)
   const fileImages = useMemo(() => ({
-    resolve: (path: string) => fileMediaUrl(document.baseURI, resolveWorkspacePath(cwd, path)),
+    resolve: (path: string) => {
+      const url = fileMediaUrl(document.baseURI, resolveWorkspacePath(cwd, path))
+      return url !== undefined && resourceUrl !== undefined ? resourceUrl(url) : url
+    },
     labels: {
       open: t('image.open'), loading: t('image.loading'), failed: t('image.failed'),
       dialog: t('image.dialog'), close: t('image.close'),
     },
-  }), [cwd, t])
+  }), [cwd, t, resourceUrl, mediaGeneration])
   const running = useSession(s => s.running)
   // Fold transitions run while a Turn is live, while an input is pending, and briefly after settling.
   const [motionTail, setMotionTail] = useState(false)
@@ -260,6 +264,11 @@ export function ChatView({
       )}
     </div>
   )
+}
+
+/** Bind host route changes to the normal Chat view without changing its Session identity. */
+export function HostChatView({ useHostMediaGeneration, ...props }: ChatViewSlotProps & PropsHooks<HostMediaHooks>) {
+  return <ChatView {...props} mediaGeneration={useHostMediaGeneration(value => value)} />
 }
 
 /** In-page Host open-path refusal: the wire reason plus a retry of the same path. */

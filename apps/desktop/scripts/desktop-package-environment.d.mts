@@ -8,6 +8,13 @@
 export function localMacOSPackageEnvironment(environment?: NodeJS.ProcessEnv): NodeJS.ProcessEnv
 
 /**
+ * Select config-free unsigned Remote SSH packaging without official signing or update settings.
+ * @param environment Parent environment retained for build tools and networking.
+ * @returns Fixed fork identity with no official release destination.
+ */
+export function localRemoteSshPackageEnvironment(environment?: NodeJS.ProcessEnv): NodeJS.ProcessEnv
+
+/**
  * Read a machine preset when selected, otherwise the target's required dotenv; no ambient release fallback.
  * PACKAGE_TEST_RELEASE_ID overrides the test preset only; blank retains its configured ID.
  * @param platform Target platform.

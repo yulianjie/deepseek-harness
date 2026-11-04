@@ -31,6 +31,8 @@ kind: "package-reference"
 
 浏览器半用纯 JavaScript 编写——无 JSX、无 TypeScript、不能 import 模块——并作为一个 async 函数运行。它拿到一组固定的名字——`React`、`console`、`styles` 与 `host`——而 `fetch`、`setTimeout` 这类浏览器全局不可用。返回的插件只能使用生命周期动词，以及它自己在 `inject` 里声明的服务。从已装载半调用 `host.call(method, args)` 会到达它自己的 host 半。React 渲染已装载半时发生的崩溃会上报 host，点名槽位、崩溃是否已把条目摘掉，以及写给作者的 message。
 
+Host 运行时装配归本地外壳负责。浏览器动态插件接口不提供 `hostRuntimeFactory`。
+
 ### 运行界面提供什么
 
 运行界面可以应答一次待审批的 host 请求——批准它（可选地同时覆盖同一插件的未来版本）或拒绝它——也可以按用户自己的手势启动一个定义，该手势本身就是授权。每个定义最多有一个在途活动，因此基于该状态构建的控件能在 remount 后存活。界面就本页显示的内容都是页面本地的：每包最后一次渲染崩溃、本页自己的尝试为何失败，以及某个包是否已在本页装载——绝不是 host 眼中「在跑」的视图。

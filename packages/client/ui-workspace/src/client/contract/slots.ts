@@ -119,6 +119,8 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
     'conversation.hero.workspace.directoryFlow': { kind: 'single'; scope: 'root'; owner: DirectoryFlowOwnerProps }
     /** Directory-flow hole under the sidebar browsing region (declared by the WorkspaceBrowser entry). */
     'sidebar.workspaces.directoryFlow': { kind: 'single'; scope: 'root'; owner: DirectoryFlowOwnerProps }
+    /** Workspace row notices and confirmation dialogs for an embedded Host. */
+    'sidebar.workspaces.overlay': { kind: 'list'; scope: 'root' }
     /**
      * Leading decoration of one Session row, in the 16px cell before the title
      * that the row's own state dot otherwise occupies. A higher-priority state
@@ -218,6 +220,8 @@ export type DirectoryPickingHooks = PropsHooks<DirectoryPickingInjected['hooks']
  * browsing region drives.
  */
 export type WorkspaceBrowserInjected = {
+  workspaceProjections?: HostObservable<readonly import('@deepseek-ai/dsh-client-ui-slots').HostWorkspaceProjection[]>
+  workspaceHostActive?: HostObservable<boolean>
   hooks: DirectoryPickingInjected['hooks'] & {
     /**
      * Fixed Host facts, reached through a hook rather than injected as values:
@@ -468,6 +472,7 @@ export type RowToastProps =
 export type WorkspaceBrowserProps =
   PropsRuntime<'sidebar.workspaces'>
   & PropsRenderSlots<
+    | 'sidebar.workspaces.overlay'
     | 'sidebar.workspaces.directoryFlow'
     | 'sidebar.workspaces.session.menu.item'
     | 'sidebar.workspaces.session.row.action'

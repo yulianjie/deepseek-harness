@@ -75,6 +75,7 @@ export function installWorkspaceShortcuts(
         'desktop:macos': { code, modifiers }, 'desktop:windows': { code, modifiers }, 'desktop:linux': { code, modifiers },
         'web:macos': { code, modifiers: webModifiers }, 'web:windows': { code, modifiers: webModifiers },
       },
+      hostScoped: id !== 'session.search',
       regions: ['page', 'editable'], modals: [], resolve,
     }), `ui-workspace: ${id}`)
   }

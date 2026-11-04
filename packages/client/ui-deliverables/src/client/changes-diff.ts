@@ -1,5 +1,6 @@
 /** Cache of the file comparisons the Host serves for listed changed files, read once per comparison and again after a failure. */
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
+import type { ClientHostPageAccess } from '@deepseek-ai/dsh-client-connection/client'
 import { changesDiffUrl, isChangesDiff, type ChangesDiff } from '../changes.ts'
 import { HostReadStore } from './host-read-store.ts'
 
@@ -11,7 +12,8 @@ export type ChangesDiffState = ChangesDiff | 'missing' | 'error' | 'loading'
 
 /** One browser plugin's comparison reads; a failed read is the one state a later request replaces. */
 export class ChangesDiffStore extends HostReadStore<ChangesDiffState> {
-  constructor() {
+  /** @param fetchRoute - Host route carrier, or absence to use browser fetch. */
+  constructor(fetchRoute?: ClientHostPageAccess['fetch']) {
     super({
       loading: 'loading',
       failed: 'error',
@@ -22,7 +24,7 @@ export class ChangesDiffStore extends HostReadStore<ChangesDiffState> {
         const value: unknown = await response.json()
         return isChangesDiff(value) ? value : 'error'
       },
-    })
+    }, fetchRoute)
   }
 
   /**

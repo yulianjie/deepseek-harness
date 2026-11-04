@@ -48,6 +48,10 @@ export interface AssistantMarkdownProps extends
   revealProcess?: (() => void) | undefined
   /** Resolved prose file mentions for this Assistant's closing turn. */
   mentions?: MarkdownFileMentions | undefined
+  /** Qualify a file media route for the owning Host. */
+  resourceUrl?: ((input: string) => string) | undefined
+  /** Current Host connection generation, used to refresh otherwise unchanged image routes. */
+  mediaGeneration?: unknown
   /** The owning view's locale seat, passed down as a plain prop. */
   t: ChatViewSlotProps['t']
 }
@@ -55,15 +59,18 @@ export interface AssistantMarkdownProps extends
 /** Renders non-blank reasoning blocks as independent disclosures alongside the response. */
 export const AssistantMarkdown = memo(function AssistantMarkdown({
   blocks, streaming, interrupted, loadImage, groupPart, useDisclosure,
-  reasoningHidden = false, usePresentation, revealProcess, mentions, renderSlot, useGroupAction, t,
+  reasoningHidden = false, usePresentation, revealProcess, mentions, renderSlot, useGroupAction, t, resourceUrl, mediaGeneration,
 }: AssistantMarkdownProps) {
   // Stable per locale revision (t identity changes on switch): a fresh object
   // per render would rebuild MarkdownText's component table every chunk.
   const labels = useMemo(() => markdownLabels(t), [t])
   // MarkdownText memoizes its vocabulary; keep its identity stable across renders.
   const pathImages = useMemo<MarkdownPathImages>(() => {
-    return { resolve: value => localPathMediaUrl(document.baseURI, value) }
-  }, [])
+    return { resolve: (value) => {
+      const url = localPathMediaUrl(document.baseURI, value)
+      return url !== undefined && resourceUrl !== undefined ? resourceUrl(url) : url
+    } }
+  }, [resourceUrl, mediaGeneration])
   const last = blocks.length - 1
   // Tool-call heads render as tool rows in the chat view's grouping pass, so
   // a node that is only those heads (or empty) would paint an empty root

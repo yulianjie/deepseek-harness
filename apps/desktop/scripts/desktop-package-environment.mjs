@@ -12,6 +12,7 @@ import { validateMacOSSignatureCacheDirectory } from './macos-signature-cache-di
 import { resolveMacOSPackageSettings } from './macos-package-settings.mjs'
 import { resolveWindowsSignatureCacheDirectory } from './windows-signature-cache-directory.mjs'
 import { resolveWindowsPackageSettings } from './windows-package-settings.mjs'
+import { REMOTE_SSH_DESKTOP } from '../src/remote-ssh-identity.ts'
 
 const APP_ROOT = fileURLToPath(new URL('..', import.meta.url))
 const SHARED_SETTING = /^(?:DSH_DESKTOP_(?:APP_ID|AUTO_UPDATE_ENV|NPM_REGISTRY|MANDATORY_UPDATE_(?:CONFIG|(?:TEST|PROD)_ORIGIN))|DOWNLOAD_TEST_RELEASE_ID|DOWNLOAD_(?:TEST|PROD)_(?:ORIGIN|COS_BUCKET|COS_SECRET_ID|COS_SECRET_KEY))$/u
@@ -31,6 +32,19 @@ export function localMacOSPackageEnvironment(environment = process.env) {
     DSH_DESKTOP_APP_ID: 'com.deepseek.harness',
     DSH_DESKTOP_UNSIGNED: '1',
   }
+}
+
+/**
+ * Select config-free unsigned Remote SSH packaging without official signing or update settings.
+ * @param {NodeJS.ProcessEnv} environment Parent environment retained for build tools and networking.
+ * @returns {NodeJS.ProcessEnv} Fixed fork identity with no official release destination.
+ */
+export function localRemoteSshPackageEnvironment(environment = process.env) {
+  const selected = localMacOSPackageEnvironment(environment)
+  for (const name of ['DSH_PACKAGING_PRESET', 'DSH_PACKAGING_CONFIG_DIR', 'PACKAGE_TEST_RELEASE_ID', 'DSH_DESKTOP_UPDATE_CHANNEL']) {
+    delete selected[name]
+  }
+  return { ...selected, DSH_DESKTOP_REMOTE_SSH: '1', DSH_DESKTOP_APP_ID: REMOTE_SSH_DESKTOP.appId }
 }
 
 /**
@@ -136,7 +150,11 @@ function requireReadableFile(environment, name) {
 export function validateDesktopPackageEnvironment(environment, target, options = {}) {
   resolveDesktopAppId(environment)
   resolveNpmRegistry(environment)
-  if (target.platform !== 'darwin' || !options.unsigned) resolveDesktopPolicyEnvironment(environment)
+  const remoteSsh = environment.DSH_DESKTOP_REMOTE_SSH === '1'
+  if (remoteSsh && !options.unsigned) {
+    throw new Error('desktop package: the Remote SSH edition requires an unsigned build')
+  }
+  if (!remoteSsh && (target.platform !== 'darwin' || !options.unsigned)) resolveDesktopPolicyEnvironment(environment)
   if (target.platform === 'darwin') resolveMacOSPackageSettings(environment)
   else resolveWindowsPackageSettings(environment)
   if (options.unsigned) return

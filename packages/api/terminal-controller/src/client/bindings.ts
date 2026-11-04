@@ -1,5 +1,6 @@
 /** Independent content-to-terminal records keep concurrent browser writes disjoint. */
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
+import { resolveHostStorage, type HostStorage } from '@deepseek-ai/dsh-client-store'
 import type { WebTerminalId } from '../types.ts'
 
 const PREFIX = 'dsh.terminal.binding.v1.'
@@ -7,6 +8,9 @@ const PREFIX = 'dsh.terminal.binding.v1.'
 /** Saved recovery targets keyed by Session and globally unique terminal content identity. */
 export class TerminalBindings {
   private readonly memory = new Map<string, WebTerminalId>()
+
+  /** @param hostStorage - Host runtime storage, or absence for ordinary browser storage. */
+  constructor(private readonly hostStorage?: HostStorage) {}
 
   /**
    * Read a saved target, retaining this window's value when storage is unavailable.
@@ -18,10 +22,9 @@ export class TerminalBindings {
     const key = this.key(sessionId, contentId)
     const known = this.memory.get(key)
     if (known !== undefined) return known
-    if (typeof localStorage === 'undefined') return undefined
     try {
-      const raw = localStorage.getItem(key)
-      if (raw === null) return undefined
+      const raw = resolveHostStorage(this.hostStorage)?.getItem(key)
+      if (raw == null) return undefined
       const value: unknown = JSON.parse(raw)
       if (typeof value !== 'string' || !/^[\w-]{1,128}$/u.test(value)) return undefined
       this.memory.set(key, value as WebTerminalId)
@@ -38,8 +41,7 @@ export class TerminalBindings {
   set(sessionId: SessionId, contentId: string, id: WebTerminalId): void {
     const key = this.key(sessionId, contentId)
     this.memory.set(key, id)
-    if (typeof localStorage === 'undefined') return
-    try { localStorage.setItem(key, JSON.stringify(id)) }
+    try { resolveHostStorage(this.hostStorage)?.setItem(key, JSON.stringify(id)) }
     catch (error) { console.error('Terminal binding persistence failed:', error) }
   }
 
@@ -51,8 +53,7 @@ export class TerminalBindings {
   delete(sessionId: SessionId, contentId: string): void {
     const key = this.key(sessionId, contentId)
     this.memory.delete(key)
-    if (typeof localStorage === 'undefined') return
-    try { localStorage.removeItem(key) }
+    try { resolveHostStorage(this.hostStorage)?.removeItem(key) }
     catch (error) { console.error('Terminal binding cleanup failed:', error) }
   }
 

@@ -1,5 +1,6 @@
 /** Fetch-once cache of the change summaries the Host serves for announced `workspace/changes` events. */
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
+import type { ClientHostPageAccess } from '@deepseek-ai/dsh-client-connection/client'
 import { changesSummaryUrl, isChangesSummary, type ChangesSummary } from '../changes.ts'
 import { HostReadStore } from './host-read-store.ts'
 
@@ -8,7 +9,8 @@ export type ChangesSummaryState = ChangesSummary | 'missing' | 'loading'
 
 /** One browser plugin's summary reads; a summary or a missing answer is kept until the connection is replaced. */
 export class ChangesSummaryStore extends HostReadStore<ChangesSummaryState> {
-  constructor() {
+  /** @param fetchRoute - Host route carrier, or absence to use browser fetch. */
+  constructor(fetchRoute?: ClientHostPageAccess['fetch']) {
     super({
       loading: 'loading',
       failed: 'missing',
@@ -18,7 +20,7 @@ export class ChangesSummaryStore extends HostReadStore<ChangesSummaryState> {
         const value: unknown = await response.json()
         return isChangesSummary(value) ? value : 'missing'
       },
-    })
+    }, fetchRoute)
   }
 
   /**

@@ -45,7 +45,7 @@ export type InputBarProps = ComposerBarProps
 
 export const InputBar = memo(function InputBar({
   useSession, useInput, inputActions, keyboard, addFiles, removeAttachment, resolveDraftAttachments,
-  retryFileUpload,
+  retryFileUpload, pickerOnly, canIntakeAmbientFiles,
   toggleCommandMenu, stop, t,
   renderSlot, useBusyEnter, useFileUploads, useNotices, useLexicon, useMenuLauncher, useStopShortcut,
   useProjection, sessionId, variant, disabled: inert = false, blocked,
@@ -238,25 +238,30 @@ export const InputBar = memo(function InputBar({
     if (rejected !== null) showToast(rejected)
   }, [locked, machineBusy, subagent, continuable, addFiles, attachments, imageLimits, showToast, t])
 
-  const canAcceptDrop = (subagent === null || continuable) && !locked && !machineBusy && addFiles !== undefined
+  const canPickFiles = (subagent === null || continuable) && !locked && !machineBusy && addFiles !== undefined
+  const canAcceptDrop = canPickFiles && pickerOnly !== true
+  const intakeAmbientFiles = useCallback((files: readonly File[], directories?: ReadonlySet<File>): void => {
+    if (!canAcceptDrop || canIntakeAmbientFiles?.() === false) return
+    intakeFiles(files, directories)
+  }, [canAcceptDrop, canIntakeAmbientFiles, intakeFiles])
 
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const onPickFiles = (e: ChangeEvent<HTMLInputElement>): void => {
     const picked = e.target.files === null ? [] : [...e.target.files]
     // Reset so picking the same file again re-fires the change event.
     e.target.value = ''
-    if (picked.length > 0) intakeFiles(picked)
+    if (picked.length > 0 && (pickerOnly !== true || e.nativeEvent.isTrusted)) intakeFiles(picked)
   }
 
   // The keymap handlers read live bar state through this ref so the editor
   // registration survives re-renders without re-arming per keystroke.
   const gate = useRef({
     locked, machineBusy, canSteerQueue, running, steeringAvailable, busyEnter,
-    intakeFiles, uploadsPending, showToast, t, canAcceptDrop,
+    intakeFiles: intakeAmbientFiles, uploadsPending, showToast, t, canPickFiles,
   })
   gate.current = {
     locked, machineBusy, canSteerQueue, running, steeringAvailable, busyEnter,
-    intakeFiles, uploadsPending, showToast, t, canAcceptDrop,
+    intakeFiles: intakeAmbientFiles, uploadsPending, showToast, t, canPickFiles,
   }
 
   useEffect(() => {
@@ -407,7 +412,7 @@ export const InputBar = memo(function InputBar({
         {renderSlot('conversation.input.attachments', {
           attachments,
           canAcceptDrop,
-          onAddFiles: intakeFiles,
+          onAddFiles: intakeAmbientFiles,
           onRemoveAttachment: (id) => { removeAttachment?.(id) },
           uploads,
           onRetryFile: (id) => { retryFileUpload?.(id) },

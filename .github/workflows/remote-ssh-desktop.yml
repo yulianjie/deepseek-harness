@@ -1,0 +1,74 @@
+name: Package Remote SSH Desktop
+
+on:
+  push:
+    branches: [remote-ssh]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: remote-ssh-desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DSH_DESKTOP_REMOTE_SSH: '1'
+  DSH_TELEMETRY_DISABLED: '1'
+
+jobs:
+  package:
+    if: github.ref == 'refs/heads/remote-ssh'
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 120
+    env:
+      # Standard Apple Silicon runners have 7 GB of memory.
+      DSH_GATE_CONCURRENCY: ${{ matrix.target == 'mac-arm64' && '1' || '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2025
+            target: win-x64
+            script: package:desktop:win:x64:unsigned
+            extension: exe
+          - runner: macos-15
+            target: mac-arm64
+            script: package:desktop:mac:arm64:unsigned
+            extension: dmg
+          - runner: macos-15-intel
+            target: mac-x64
+            script: package:desktop:mac:x64:unsigned
+            extension: dmg
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v5.0.0
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: '24'
+          cache: pnpm
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build installer and verify the packaged runtime
+        run: pnpm run ${{ matrix.script }}
+      - name: Upload unsigned installer
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: remote-ssh-desktop-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: apps/desktop/.desktop-build/targets/${{ matrix.target }}/unsigned-artifacts/deepseek-harness-remote-ssh-*-unsigned.${{ matrix.extension }}
+          compression-level: 0
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload packaging diagnostics
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: remote-ssh-desktop-${{ matrix.target }}-logs-${{ github.run_id }}-${{ github.run_attempt }}
+          path: apps/desktop/.desktop-build/packaging-runs/
+          include-hidden-files: true
+          if-no-files-found: ignore
+          retention-days: 14

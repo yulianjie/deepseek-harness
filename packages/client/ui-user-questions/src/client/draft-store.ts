@@ -3,7 +3,7 @@
  * registry owns store instances; this module exports only the factory so a
  * plugin reload cannot reuse a module-global handle.
  */
-import { defineStore, type EngineStoreHandle } from '@deepseek-ai/dsh-client-store'
+import { defineStore, type EngineStoreHandle, type HostStorage } from '@deepseek-ai/dsh-client-store'
 
 /** One in-progress answer, including an explicit skip. */
 export interface QuestionDraftAnswer {
@@ -37,10 +37,11 @@ type QuestionDraftActions = {
 
 /**
  * Declare the question composer's Session store. Drafts persist per Session so
- * leaving the Session or restarting the Client does not erase an unfinished answer.
+ * leaving the Session does not erase an unfinished answer.
+ * @param storage - Host backend, or absence for ordinary browser storage.
  * @returns a persisted store handle whose instance is owned by the Slot registry.
  */
-export function createQuestionDraftStore(): EngineStoreHandle<QuestionDraftState, QuestionDraftActions> {
+export function createQuestionDraftStore(storage?: HostStorage): EngineStoreHandle<QuestionDraftState, QuestionDraftActions> {
   return defineStore({
     init: (): QuestionDraftState => ({ progressByRequest: {} }),
     persist: 'dsh.user-questions.drafts.v1',
@@ -60,5 +61,5 @@ export function createQuestionDraftStore(): EngineStoreHandle<QuestionDraftState
         )
       },
     },
-  })
+  }, storage)
 }

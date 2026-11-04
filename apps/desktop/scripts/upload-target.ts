@@ -64,6 +64,7 @@ export function resolveCredentialUploadEnvironment(
  * @returns Resolves after upload and any release-tag attempt complete.
  */
 export async function uploadDesktopTarget(args: string[]): Promise<void> {
+  if (process.env.DSH_DESKTOP_REMOTE_SSH === '1') throw new Error('desktop upload: official update publishing is disabled for the Remote SSH edition.')
   const { positionals, values } = parseArgs({ args, allowPositionals: true, options: {
     latest: { type: 'boolean' },
     'credential-launcher': { type: 'boolean' }, environment: { type: 'string' }, bucket: { type: 'string' },
@@ -123,7 +124,9 @@ function recordProductionRelease(plan: DesktopUploadPlan): void {
 
 if (process.argv[1] !== undefined && import.meta.filename === resolve(process.argv[1])) {
   uploadDesktopTarget(process.argv.slice(2)).catch(() => {
-    process.stderr.write('desktop upload: failed; inspect the printed record directory if allocated. No automatic retry; reconcile remote state before another upload.\n')
+    process.stderr.write(process.env.DSH_DESKTOP_REMOTE_SSH === '1'
+      ? 'desktop upload: official update publishing is disabled for the Remote SSH edition.\n'
+      : 'desktop upload: failed; inspect the printed record directory if allocated. No automatic retry; reconcile remote state before another upload.\n')
     process.exitCode = 1
   })
 }

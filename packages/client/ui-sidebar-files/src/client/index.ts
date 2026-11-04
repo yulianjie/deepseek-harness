@@ -69,6 +69,7 @@ export function apply(ctx: ClientContext): void {
       },
       // Each tab plugin owns its command's availability, localized refusal, and tab kind.
       /* jscpd:ignore-start */
+      hostScoped: true,
       regions: ['page', 'editable', 'terminal'], modals: [],
       resolve: ({ target: element }) => {
         const target = ctx.sidebarRight.commandTarget(element)

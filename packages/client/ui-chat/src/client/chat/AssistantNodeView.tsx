@@ -1,16 +1,17 @@
 import { memo, useCallback, useMemo } from 'react'
-import type { InjectFace, PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
-import type { ChatNodeViewProps, PresentationInjected, TurnTailOwnerProps } from '../contract/slots.ts'
+import type { InjectFace, PropsHooks, PropsRenderSlots } from '@deepseek-ai/dsh-client-ui-slots'
+import type { ChatNodeViewProps, ChatViewInjected, HostMediaHooks, PresentationInjected, TurnTailOwnerProps } from '../contract/slots.ts'
 import { AssistantMarkdown } from './AssistantMarkdown.tsx'
 
-type AssistantNodeViewProps = ChatNodeViewProps<'assistant-step'> & InjectFace<PresentationInjected>
+type AssistantNodeViewProps = ChatNodeViewProps<'assistant-step'>
+  & InjectFace<PresentationInjected & Pick<ChatViewInjected, 'resourceUrl'>>
   & PropsRenderSlots<'conversation.chat.reasoning.body' | 'conversation.chat.message.images'>
 
 /** Streaming, settled, and interrupted Assistant states share one keyed renderer instance. */
 export const AssistantNodeView = memo(function AssistantNodeView({
   node, groupPart, useDisclosure, useGroupAction, useTurnData, turnProcess, openFile, loadImage, fileMentions,
-  usePresentation, renderSlot, t,
-}: AssistantNodeViewProps) {
+  usePresentation, renderSlot, t, resourceUrl, mediaGeneration,
+}: AssistantNodeViewProps & { mediaGeneration?: unknown }) {
   const data = node.data
   const turn = node.location.kind === 'turn' || node.location.kind === 'step'
     ? node.location.turn
@@ -45,7 +46,14 @@ export const AssistantNodeView = memo(function AssistantNodeView({
       renderSlot={renderSlot}
       revealProcess={revealProcess}
       mentions={mentions}
+      resourceUrl={resourceUrl}
+      mediaGeneration={mediaGeneration}
       t={t}
     />
   )
 })
+
+/** Bind host route changes to the normal Assistant node. */
+export function HostAssistantNodeView({ useHostMediaGeneration, ...props }: AssistantNodeViewProps & PropsHooks<HostMediaHooks>) {
+  return <AssistantNodeView {...props} mediaGeneration={useHostMediaGeneration(value => value)} />
+}

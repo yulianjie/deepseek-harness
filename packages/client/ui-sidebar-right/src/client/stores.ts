@@ -26,7 +26,7 @@
  * into the pane's own — the arriving tab closes and the pane's own is focused.
  * The kit plans none of this; it is decided here before its planners run.
  */
-import { defineStore, type EngineStoreHandle } from '@deepseek-ai/dsh-client-store'
+import { defineStore, type EngineStoreHandle, type HostStorage } from '@deepseek-ai/dsh-client-store'
 import { clearSidebarLayout, readSidebarLayout, writeSidebarLayout } from './persistence.ts'
 import type {
   DockMode, DockZone, FloatRect, History, LayoutOp, LayoutState, Mint, PaneId, SplitId, TabId, TabRecord,
@@ -256,16 +256,18 @@ function stepped(surface: SurfaceState, step: HistoryStepper): SurfaceState {
 }
 
 /**
- * Create the Sidebar store handle with per-Session JSON persistence in localStorage.
+ * Create the Sidebar store handle with per-Session JSON persistence.
  *
  * The default page arrives as a thunk: a pane is seeded when a split or an
  * expansion of an empty column needs one, which can be long after the store was
  * built and in a language the user has since changed to.
  * @param seed - the registered default page, read at each mint.
+ * @param storage - Host backend, or absence for ordinary browser storage.
  * @returns the handle (spec, type, identity, and factory in one).
  */
 export function createSidebarRightStore(
   seed: () => SidebarRightSeed,
+  storage?: HostStorage,
 ): EngineStoreHandle<SidebarRightState, SidebarRightActions> {
   const handle = defineStore<SidebarRightState, SidebarRightActions>({
     init: (): SidebarRightState => ({ bySession: {} }),
@@ -427,12 +429,12 @@ export function createSidebarRightStore(
   return { ...handle, create(scopeKey) {
     const instance = handle.create(scopeKey)
     if (scopeKey === undefined) return instance
-    const saved = readSidebarLayout(scopeKey)
+    const saved = readSidebarLayout(scopeKey, storage)
     if (saved !== undefined) instance.store.set({ bySession: { [scopeKey]: saved } })
     instance.subscribe(() => {
       const surface = instance.getSnapshot().bySession[scopeKey]
-      if (surface !== undefined) writeSidebarLayout(scopeKey, surface)
+      if (surface !== undefined) writeSidebarLayout(scopeKey, surface, storage)
     })
-    return { ...instance, clearPersisted: () => { clearSidebarLayout(scopeKey) } }
+    return { ...instance, clearPersisted: () => { clearSidebarLayout(scopeKey, storage) } }
   } }
 }

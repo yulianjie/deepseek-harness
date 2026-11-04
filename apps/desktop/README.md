@@ -13,6 +13,7 @@ Desktop runs the Harness workspace in a native application. This reference cover
 ## Table of Contents
 
 - [Application overview](#application-overview)
+- [Remote SSH edition](#remote-ssh-edition)
 - [Terminal command](#terminal-command)
 - [Closing the window and quitting](#closing-the-window-and-quitting)
 - [Key technical decisions](#key-technical-decisions)
@@ -51,6 +52,20 @@ A server-expired account credential returns to Welcome when no official API key 
 Desktop microphone access is restricted to audio requests from the primary `dsh-app://app` frame. macOS uses system microphone authorization, a packaged usage description, and `com.apple.security.device.audio-input` in the main application and Helper signatures.
 
 Press F12 (Fn+F12 on media-key keyboards), Command+Option+I on macOS, or Ctrl+Shift+I on Windows to toggle DevTools for the focused application page, including in packaged builds. These native shortcuts use hidden application-menu items. Update overlays and packaged embedded browser guests disable DevTools.
+
+## Remote SSH edition
+
+The fork's `remote-ssh` branch packages **DeepSeek Harness Remote SSH** as a separate app, with its own Harness and agent directories and no official update feed. On the [GitHub Actions workflow](../../.github/workflows/remote-ssh-desktop.yml), open a completed run and download the Windows x64 or macOS installer from **Artifacts**. These builds are unsigned for Windows and are not notarized for macOS.
+
+The installed app can run alongside the official Desktop. Its browser data and shell settings live in `%APPDATA%\dsh-remote-ssh-desktop` on Windows or `~/Library/Application Support/dsh-remote-ssh-desktop` on macOS. The fork stores its local Harness profile in `~/.dsh-remote-ssh` and shared agent configuration in `~/.agents-remote-ssh`, regardless of the official app's environment variables. It owns the `dsh-remote-ssh://` protocol and does not offer to install a global `dsh` command. Get newer builds from the fork's workflow artifacts.
+
+For local packaging, set `DSH_DESKTOP_REMOTE_SSH=1` when running the package command for your platform. This selects the unsigned fork and ignores official release settings.
+
+1. Confirm that `ssh <alias>` works from your terminal. Use your usual OpenSSH configuration and keys or agent.
+2. In the Desktop sidebar, open **远程连接** (Remote connections), add the alias or choose it from **发现 SSH 别名** (Discover SSH aliases), and select **连接** (Connect). The first connection can install and start the pinned Harness runtime in your remote Linux account. Use Node.js 24 in the remote login shell. The installer uses the executable that shell resolves and reports an error if it is incompatible.
+3. In **Add workspace**, select the SSH host and browse to the remote project. Local and SSH projects share the sidebar; select a session to switch without reloading. Configure a model on the remote host if it does not have one. Remote commands, files, Git changes, attachments and session history belong to that host.
+
+If SSH disconnects, reconnect from **远程连接**. The remote session does not fall back to your local machine and unfinished requests are not automatically replayed. Closing the Desktop connection leaves the remote Harness running.
 
 <a id="terminal-command"></a>
 
@@ -201,6 +216,8 @@ After an explicit build, `start:desktop` reconstructs the disposable project and
 ```sh
 pnpm run start:desktop
 ```
+
+On Windows x64, either development command accepts `--reuse-primary-runtime=<absolute-directory>` for a matching installed payload. The launcher checks the pinned target and versions, stages an ordinary copy and the workspace Office assets under `.desktop-build/development/runtime-reuse`, and runs the native runtime checks at the short cache path before launching Electron. Leave the option unset to prepare the payload from the locked archives.
 
 The Web counterparts are `pnpm run dev:web` and `pnpm run start:web`, documented in the [development guide](../../docs/development.md). Workspace development runs the current CLI and private Desktop Host packages under Electron RunAsNode. Plugin management and recovery use `$DSH_HOME/profiles/desktop`, separate from the disposable workspace runtime. The Host uses runtime module resolution in both development and packaged builds without creating official-package fallback links; developer-installed packages, including links, retain native priority. Use an unpacked application to exercise Electron RunAsNode, bundled pnpm, bundled dsh resources, plugin installation and repair paths.
 

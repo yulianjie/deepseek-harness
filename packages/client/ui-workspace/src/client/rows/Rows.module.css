@@ -112,6 +112,19 @@
   gap: 0;
 }
 
+.hostLabel {
+  flex: 0 1 auto;
+  max-width: 72px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  padding-inline: 4px;
+  border-radius: var(--dsw-radius-sm);
+  background: var(--dsw-alias-interactive-bg-hover);
+  color: var(--dsw-alias-label-secondary);
+  font-size: 11px;
+}
+
 .sessionRow .title {
   margin: 0 6px 0 4px;
 }

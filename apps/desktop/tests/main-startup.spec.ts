@@ -159,9 +159,11 @@ const harness = await vi.hoisted(async () => {
     getVersion: () => '1.0.0',
     getAppPath: (): string => 'desktop-test-app',
     setAppLogsPath: vi.fn(),
+    setPath: vi.fn(),
+    setAppUserModelId: vi.fn(),
     getPath: vi.fn<(name: string) => string>(),
     setAboutPanelOptions: vi.fn<(options: Electron.AboutPanelOptionsOptions) => void>(),
-    requestSingleInstanceLock: () => true,
+    requestSingleInstanceLock: vi.fn(() => true),
     setAsDefaultProtocolClient: vi.fn(),
     exit: vi.fn(),
     relaunch: vi.fn(),
@@ -244,6 +246,7 @@ const harness = await vi.hoisted(async () => {
       shellDialog.isOpen = false
       powerMonitor.removeAllListeners()
       app.isPackaged = true
+      app.name = 'Desktop test'
       windowFailure = undefined
       pluginsEnabled = false
       closeWindowsOnQuit = false
@@ -443,6 +446,30 @@ afterEach(async () => {
 })
 
 describe('desktop main startup', () => {
+  it('isolates the packaged Remote SSH edition before locking and skips upstream update checks', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'dsh-remote-ssh-edition-'))
+    onTestFinished(() => { rmSync(root, { recursive: true, force: true }) })
+    const getPath = harness.app.getPath.getMockImplementation()!
+    harness.app.getPath.mockImplementation(name => name === 'appData' || name === 'home' ? root : getPath(name))
+    harness.app.name = 'DeepSeek Harness Remote SSH'
+    harness.embeddedPolicy = { origin: 'https://policy.example.com' }
+    vi.stubEnv('DSH_HOME', join(root, 'official-harness'))
+    vi.stubEnv('DSH_AGENTS_HOME', join(root, 'official-agents'))
+    const host = await readyForUpdate()
+    const profile = join(root, 'dsh-remote-ssh-desktop')
+    expect(harness.app.setPath.mock.calls).toEqual([['userData', profile], ['sessionData', profile]])
+    expect(harness.app.setPath.mock.invocationCallOrder.at(-1)).toBeLessThan(
+      harness.app.requestSingleInstanceLock.mock.invocationCallOrder[0]!,
+    )
+    expect(harness.app.setAppUserModelId).toHaveBeenCalledWith('io.github.yulianjie.dsh.remote-ssh')
+    expect(harness.app.setAsDefaultProtocolClient).toHaveBeenCalledExactlyOnceWith('dsh-remote-ssh')
+    expect(host.environment).toMatchObject({ DSH_HOME: join(root, '.dsh-remote-ssh'), DSH_AGENTS_HOME: join(root, '.agents-remote-ssh') })
+    expect(applicationMenuItems().map(item => item.label)).not.toContain(en.cliCommandMenu)
+    expect(applicationMenuItems().map(item => item.label)).not.toContain(en.checkUpdatesMenu)
+    await invoke(DESKTOP_IPC.updatesOpen, 'app')
+    expect(harness.updateCheck).not.toHaveBeenCalled()
+  })
+
   it.each([true, false])('selects the package manager before Host startup (packaged=%s)', async (packaged) => {
     harness.app.isPackaged = packaged
     await readyForUpdate()

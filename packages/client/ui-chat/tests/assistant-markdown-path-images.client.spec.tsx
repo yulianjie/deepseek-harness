@@ -88,6 +88,51 @@ describe('AssistantMarkdown local-path images', () => {
     expect(container.querySelector('img')).toBeNull()
     expect(container.textContent).toContain('diagram')
   })
+
+  it('addresses identical paths through the owning Host before emitting media URLs', () => {
+    vi.spyOn(document, 'baseURI', 'get').mockReturnValue('dsh-app://app/')
+    const markdown = (resourceUrl?: (url: string) => string) => (
+      <AssistantMarkdown renderSlot={() => null} useDisclosure={useDisclosure} useGroupAction={useSearchableHidden}
+        usePresentation={useDetailedPresentation}
+        blocks={[textBlock('![diagram](/tmp/graph.png)')]}
+        streaming={false}
+        loadImage={unusedImageLoader}
+        resourceUrl={resourceUrl}
+        t={t}
+      />
+    )
+    const remoteRoute = (input: string) => {
+      const url = new URL(input)
+      url.searchParams.set('test-host', 'remote')
+      return url.href
+    }
+    const { container } = render(<>{markdown()}{markdown(remoteRoute)}</>)
+    const routes = [...container.querySelectorAll('img')].map(image => new URL(image.src))
+    expect(routes.map(route => route.searchParams.get('path'))).toEqual(['/tmp/graph.png', '/tmp/graph.png'])
+    expect(routes.map(route => route.searchParams.get('test-host'))).toEqual([null, 'remote'])
+  })
+
+  it('refreshes the same Markdown source when its Host route generation changes', () => {
+    vi.spyOn(document, 'baseURI', 'get').mockReturnValue('dsh-app://app/')
+    let route = 'first'
+    const resourceUrl = (input: string) => {
+      const url = new URL(input)
+      url.searchParams.set('lease', route)
+      return url.href
+    }
+    const blocks = [textBlock('![diagram](/tmp/graph.png)')]
+    const markdown = () => (
+      <AssistantMarkdown renderSlot={() => null} useDisclosure={useDisclosure} useGroupAction={useSearchableHidden}
+        usePresentation={useDetailedPresentation} blocks={blocks} streaming={false}
+        loadImage={unusedImageLoader} resourceUrl={resourceUrl} mediaGeneration={route} t={t}
+      />
+    )
+    const view = render(markdown())
+    expect(view.container.querySelector('img')?.src).toContain('lease=first')
+    route = 'second'
+    view.rerender(markdown())
+    expect(view.container.querySelector('img')?.src).toContain('lease=second')
+  })
 })
 
 it('decodes Markdown URL escapes once before encoding the file query', () => {

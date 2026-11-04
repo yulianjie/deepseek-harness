@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
+import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
 import { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
 import ShortcutsService from '../src/client/index.ts'
 import { initialShortcutConfig } from '../src/protocol.ts'
@@ -38,12 +39,13 @@ function desktop() {
   Object.defineProperty(window, 'dshDesktop', { configurable: true, value: { shortcuts: api, keyboard } })
   return { api, keyboard, publish: (value: ShortcutConfigSnapshot) => { publish(value) }, unsubscribe }
 }
-function mount() {
+function mount(options?: ConstructorParameters<typeof ShortcutsService>[1], prepare?: (ctx: Context) => void) {
   const ctx = new Context()
   ctx.provide('locale', new LocaleRuntime(ctx))
+  prepare?.(ctx)
   const dispose = async () => { await ctx.fiber.dispose() }
   disposers.push(dispose)
-  const service = new ShortcutsService(ctx)
+  const service = new ShortcutsService(ctx, options)
   return { ctx, service, dispose }
 }
 
@@ -63,6 +65,16 @@ it('closes the Desktop window with the latest accepted revision and propagates b
 it('rejects a native window close outside Desktop', async () => {
   const { service } = mount()
   await expect(service.closeWindow()).rejects.toThrow('Desktop keyboard bridge unavailable')
+})
+
+it('builds a Host pane catalog without subscribing to native input or shortcut preferences', () => {
+  const fixture = desktop()
+  const { service } = mount({ presentation: 'pane' })
+  service.register(command)
+  expect(service.catalog.getSnapshot()).toMatchObject([{ id: command.id }])
+  expect(fixture.keyboard.subscribe).not.toHaveBeenCalled()
+  expect(fixture.api.subscribe).not.toHaveBeenCalled()
+  expect(fixture.api.get).not.toHaveBeenCalled()
 })
 
 it('describes registered binding conflicts on Linux Desktop', async () => {
@@ -197,4 +209,49 @@ it('propagates catalog publication failures after a successful preference save',
   await expect(service.edit({ type: 'reset-all' }, service.config.getSnapshot().revision))
     .rejects.toThrow('Command label unavailable')
   expect(f.api.edit).toHaveBeenCalledOnce()
+})
+
+it('routes one native command and fixed input to the foreground Host, ignoring focus in the pane it replaced', async () => {
+  const fixture = desktop()
+  const target = createSnapshotStore<ReturnType<NonNullable<Context['hostShortcutTarget']>['getSnapshot']>>(undefined)
+  const local = mount(undefined, (ctx) => { ctx.provide('hostShortcutTarget', target) }).service
+  const remote = mount({ presentation: 'pane' }, (ctx) => { ctx.provide('hostWindowShortcuts', local) }).service
+  const localRun = vi.fn()
+  const remoteRun = vi.fn()
+  local.register({ ...command, hostScoped: true, resolve: () => ({ status: 'handled', run: localRun }) })
+  remote.register({ ...command, hostScoped: true, resolve: () => ({ status: 'handled', run: remoteRun }) })
+  const localInput = vi.fn()
+  const remoteInput = vi.fn()
+  local.observeFixedInput(localInput, 'host')
+  remote.observeFixedInput(remoteInput, 'host')
+  await vi.waitFor(() => { expect(local.config.getSnapshot().status).toBe('ready') })
+  const deliver = fixture.keyboard.subscribe.mock.calls[0]?.[0]
+  expect(deliver).toBeDefined()
+  const menu = () => deliver?.({ kind: 'menu', commandId: command.id, revision: local.config.getSnapshot().revision })
+
+  const element = document.createElement('input')
+  element.setAttribute('data-host-pane', '')
+  element.setAttribute('data-shortcut-host', 'remote')
+  document.body.append(element)
+  try {
+    menu()
+    expect(localRun).toHaveBeenCalledOnce()
+    target.set({ hostKey: 'remote', shortcuts: remote })
+    element.focus()
+    menu()
+    expect(remoteRun).toHaveBeenCalledOnce()
+    element.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, code: 'Escape' }))
+    expect(remoteInput).toHaveBeenLastCalledWith(expect.objectContaining({ type: 'keydown' }))
+    expect(localInput).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'keydown' }))
+    target.set(undefined)
+    expect(remoteInput).toHaveBeenLastCalledWith({ type: 'reset' })
+    menu()
+    element.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, code: 'Escape' }))
+    expect(localRun).toHaveBeenCalledOnce()
+    expect(remoteRun).toHaveBeenCalledOnce()
+    expect(localInput).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'keydown' }))
+    expect(fixture.keyboard.subscribe).toHaveBeenCalledOnce()
+  } finally {
+    element.remove()
+  }
 })

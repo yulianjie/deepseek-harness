@@ -29,7 +29,7 @@ export function detectEnvironment(document: Document, navigator: Navigator): {
  * @returns disposer releasing every listener, the modal observer, and cached nodes.
  */
 export function installKeyboard(window: Window, shortcuts: Pick<ShortcutRegistry, 'dispatch' | 'runtime' | 'platform'>,
-  fixed?: (input: ShortcutFixedInput) => void, native = false): () => void {
+  fixed?: (input: ShortcutFixedInput) => void, native = false, routeHostPanes = false): () => void {
   const document = window.document
   const composition = observeComposition(document)
   let pending = false
@@ -65,8 +65,11 @@ export function installKeyboard(window: Window, shortcuts: Pick<ShortcutRegistry
     window.clearTimeout(pendingTimer)
     pendingTimer = undefined
     pending = false
-    const target = event.composedPath().find(value => value instanceof Element)
+    const path = event.composedPath()
+    const target = path.find(value => value instanceof Element)
     const element = target instanceof Element ? target : document.activeElement
+    if (!routeHostPanes && (element?.closest('[data-host-pane]') != null
+      || path.some(value => value instanceof Element && value.hasAttribute('data-host-pane')))) { reset(); return }
     const region = element?.closest('.xterm') ? 'terminal'
       : element?.closest('input, textarea, select, [contenteditable="true"], [contenteditable=""]') ? 'editable' : 'page'
     // Local handlers can change modals before MutationObserver delivers its records.

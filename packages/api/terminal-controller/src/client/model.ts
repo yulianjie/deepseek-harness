@@ -1,7 +1,7 @@
 /** React-free browser terminal state and reconnecting Remote-stream ownership. */
 import { preferredShell, rememberShell } from './shell-preference.ts'
 import type { TerminalInventory } from './inventory.ts'
-import { createSnapshotStore, type SnapshotStore } from '@deepseek-ai/dsh-client-store'
+import { createSnapshotStore, type HostStorage, type SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import { Deque } from '@deepseek-ai/dsh-deque'
 import { RemoteStreamCarrierError, type ClientRemote, type RemoteStream } from '@deepseek-ai/dsh-api-gateway/client'
 import { RemoteError, remoteErrorOf, type RemoteResult, type RemoteStreamHandle, type RemoteUplinkWindow } from '@deepseek-ai/dsh-typert-protocol'
@@ -89,6 +89,7 @@ export class TerminalView {
    * @param createWhenMissing - allow allocation only for a new tab, never a listed terminal.
    * @param shellPath - explicit shell chosen at the guide; omission uses the remembered available shell.
    * @param retain - window hold acknowledgement required before output attachment.
+   * @param hostStorage - Host runtime storage, or absence for ordinary browser storage.
    */
   constructor(
     private readonly sessionId: SessionId,
@@ -99,6 +100,7 @@ export class TerminalView {
     private createWhenMissing = true,
     private readonly shellPath?: string,
     private readonly retain?: (signal: AbortSignal) => Promise<void>,
+    private readonly hostStorage?: HostStorage,
   ) {}
 
   /**
@@ -140,11 +142,11 @@ export class TerminalView {
         let path = this.shellPath
         if (path === undefined) {
           const shells = valueOf(await this.remote.shells(this.sessionId, this.lifetime.signal))
-          const previous = preferredShell()
+          const previous = preferredShell(this.hostStorage)
           path = shells.find(shell => shell.path === previous)?.path ?? shells[0]?.path
         }
         if (this.stopped()) return
-        if (path !== undefined) rememberShell(path)
+        if (path !== undefined) rememberShell(path, this.hostStorage)
         await this.create(valueOf(environment), path)
       }
       else throw new TerminalViewError('missingTerminal')

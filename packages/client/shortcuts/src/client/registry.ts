@@ -5,6 +5,10 @@ import type { ShortcutCommandId, ShortcutConfigSnapshot, ShortcutDefinition, Sho
 import type { ShortcutCatalogEntry, ShortcutCommand, ShortcutContext, ShortcutGesture,
   ShortcutFixedCommand, ShortcutFixedCatalogEntry } from './types.ts'
 
+export type CommandResolver = (command: ShortcutCommand, context: ShortcutContext) => ReturnType<ShortcutCommand['resolve']>
+
+const ownResolution: CommandResolver = (command, context) => command.resolve(context)
+
 /** Dispatch consumption is independent of later business-operation success. */
 type ShortcutDispatch = { status: 'handled'; commandId: ShortcutCommandId }
   | { status: 'blocked'; commandId: ShortcutCommandId; reason: string }
@@ -25,7 +29,8 @@ export class ShortcutRegistry {
   readonly fixedCatalog = createSnapshotStore<readonly ShortcutFixedCatalogEntry[]>([])
 
   constructor(readonly runtime: ShortcutRuntime, readonly platform: ShortcutPlatform,
-    config: ShortcutConfigSnapshot = { ...initialShortcutConfig(), status: 'ready' }) {
+    config: ShortcutConfigSnapshot = { ...initialShortcutConfig(), status: 'ready' },
+    private readonly resolve: CommandResolver = ownResolution) {
     this.state = createSnapshotStore<{ catalog: readonly ShortcutCatalogEntry[]; config: ShortcutConfigSnapshot }>({ catalog: [], config })
     this.catalog = { getSnapshot: () => this.state.getSnapshot().catalog,
       subscribe: (listener: () => void) => this.state.subscribe(listener) }
@@ -132,6 +137,11 @@ export class ShortcutRegistry {
     this.refreshFixedLabels()
   }
 
+  /** Resolve a shell-matched command without reading this registry's key bindings. */
+  resolveHostCommand(id: ShortcutCommandId, context: ShortcutContext): ReturnType<ShortcutCommand['resolve']> {
+    return this.commands.get(id)?.resolve(context) ?? { status: 'pass' }
+  }
+
   /**
    * Invoke a native menu selection independently of its optional key binding.
    * @param id - registered product command.
@@ -140,7 +150,7 @@ export class ShortcutRegistry {
   invoke(id: ShortcutCommandId, context: ShortcutContext): void {
     const command = this.commands.get(id)
     if (command === undefined || (context.modal !== null && !command.modals.includes(context.modal))) return
-    const result = command.resolve({ ...context, source: 'menu' })
+    const result = this.resolve(command, { ...context, source: 'menu' })
     if (result.status === 'handled') result.run()
   }
 
@@ -170,7 +180,7 @@ export class ShortcutRegistry {
       consume()
       return { status: 'blocked', commandId: command.id, reason: 'modal' }
     }
-    const resolution = command.resolve(context)
+    const resolution = this.resolve(command, context)
     if (resolution.status === 'pass') return resolution
     consume()
     if (resolution.status === 'blocked') return { ...resolution, commandId: command.id }

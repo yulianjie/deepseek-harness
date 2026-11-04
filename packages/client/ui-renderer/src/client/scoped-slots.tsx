@@ -1317,11 +1317,11 @@ function RootOutlet({ ownerProps }: { ownerProps: object }) {
  */
 export function createSlotRenderer(): SlotRenderer {
   return {
-    renderRoot(host, ownerProps) {
+    renderRoot(host, ownerProps, selection) {
       return (
         <HostContext.Provider value={host}>
           <RootStandardProvider>
-            <ScopeProvider scope="session-maybe">
+            <ScopeProvider scope="session-maybe" selection={selection}>
               <RootOutlet ownerProps={ownerProps} />
             </ScopeProvider>
           </RootStandardProvider>

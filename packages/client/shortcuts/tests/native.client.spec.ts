@@ -39,6 +39,10 @@ it.each(['macos', 'windows'] as const)('prioritizes %s custom native bindings ac
   terminal.className = ''
   deliver(input)
   expect(run).toHaveBeenCalledTimes(2)
+  terminal.setAttribute('data-host-pane', 'true')
+  deliver(input)
+  expect(run).toHaveBeenCalledTimes(2)
+  terminal.removeAttribute('data-host-pane')
   terminal.setAttribute('role', 'dialog'); terminal.setAttribute('aria-modal', 'true')
   deliver(input)
   expect(run).toHaveBeenCalledTimes(3)

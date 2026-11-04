@@ -1,0 +1,477 @@
+// @vitest-environment jsdom
+import { resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
+import { Context, type Plugin } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/dsh-api-session-controller/client'
+import type { ConnectionHandle } from '@deepseek-ai/dsh-client-connection/client'
+import { installConnection } from '@deepseek-ai/dsh-client-connection/client'
+import { brandString } from '@deepseek-ai/dsh-brand'
+import { createMemoryHostStorage, createSnapshotStore } from '@deepseek-ai/dsh-client-store'
+import { createHostRuntime, getStaticModules, type HostKey } from '@deepseek-ai/dsh-client-web'
+import { bootClient } from '@deepseek-ai/dsh-client-web/src/boot-client.ts'
+import { installDesktopSsh } from '@deepseek-ai/dsh-client-web/src/desktop-ssh.ts'
+import { provideHostRuntimeFactory } from '@deepseek-ai/dsh-client-web/src/host-runtime-factory.ts'
+import { mountClient } from '@deepseek-ai/dsh-client-web/src/mount.ts'
+import { allowAllAccessPlugin } from '@deepseek-ai/dsh-client-test-runtime/src/access.ts'
+import { webApp } from '@deepseek-ai/dsh-client-test-runtime/src/assembly/index.ts'
+import { createInProcessModules, loadPluginModules } from '@deepseek-ai/dsh-client-test-runtime/src/assembly/modules.ts'
+import { remoteNamespacesOf, remoteProxiesPlugin } from '@deepseek-ai/dsh-client-test-runtime/src/assembly/remote-proxies.ts'
+import { graphFromRoster } from '@deepseek-ai/dsh-client-test-runtime/src/assembly/roster.ts'
+import * as layout from '@deepseek-ai/dsh-client-ui-layout/client'
+import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
+import { SessionId } from '@deepseek-ai/dsh-session/types'
+import { act, cleanup, fireEvent, render, waitFor, within } from '@testing-library/react'
+import { createElement, type ReactNode } from 'react'
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from 'vitest'
+import { createAssembledRemote, type AssembledRemote } from './assembled-remote.ts'
+
+const sharedId = SessionId('fx-gamma')
+const connectionPackage = '@deepseek-ai/dsh-client-connection'
+const layoutPackage = '@deepseek-ai/dsh-client-ui-layout'
+
+beforeEach(() => {
+  vi.stubGlobal('ResizeObserver', class {
+    observe(): void {}
+    disconnect(): void {}
+  })
+  const fonts = Object.getOwnPropertyDescriptor(document, 'fonts')
+  const rangeRect = Object.getOwnPropertyDescriptor(Range.prototype, 'getBoundingClientRect')
+  Object.defineProperty(document, 'fonts', { configurable: true, value: new EventTarget() })
+  Object.defineProperty(Range.prototype, 'getBoundingClientRect', { configurable: true, value: () => new DOMRect() })
+  onTestFinished(() => {
+    if (fonts === undefined) Reflect.deleteProperty(document, 'fonts')
+    else Object.defineProperty(document, 'fonts', fonts)
+    if (rangeRect === undefined) Reflect.deleteProperty(Range.prototype, 'getBoundingClientRect')
+    else Object.defineProperty(Range.prototype, 'getBoundingClientRect', rangeRect)
+  })
+})
+
+afterEach(() => {
+  cleanup()
+  vi.unstubAllGlobals()
+})
+
+async function openFixtureHost(name: string) {
+  const { mock } = createAssembledRemote({ positionalRequests: true })
+  mock.stream('$events', (_args, stream) => {
+    stream.push({ type: 'ready', clientId: name, host: { home: '/home/fixture' } })
+  })
+  const storage = createMemoryHostStorage()
+  storage.setItem('dsh.sessions.current', JSON.stringify({ sessionId: sharedId }))
+  const runtime = await createHostRuntime({
+    hostKey: brandString<HostKey>(name),
+    installConnection,
+    connection: { interactions: 'answer', transport: { rpc: mock.rpc } },
+    storage,
+    async compose(ctx) {
+      const roster = webApp.without([
+        '@deepseek-ai/dsh-api-remotes', '@deepseek-ai/dsh-api-remote-access', '@deepseek-ai/dsh-client-hmr',
+      ])
+      const modules = await loadPluginModules({
+        roster,
+        provide: {
+          [connectionPackage]: { apply() {} },
+          [layoutPackage]: { ...layout, apply: (scope) => { layout.apply(scope, { presentation: 'pane' }) } },
+        },
+      })
+      ctx.plugin(remoteProxiesPlugin(remoteNamespacesOf(modules.values(), mock), mock) as Plugin)
+      ctx.plugin(allowAllAccessPlugin)
+      const system = createInProcessModules(graphFromRoster(roster.rows), modules)
+      await bootClient({ ctx, modules: system, manifest: system.manifest })
+    },
+  })
+  onTestFinished(() => runtime.dispose())
+  const connection = runtime.ctx.get('connection') as ConnectionHandle
+  await waitFor(() => { expect(connection.state.getSnapshot()).toBe('connected') })
+  const reference = runtime.ctx.sessions.retain(sharedId, { source: 'mainView' })
+  onTestFinished(() => { reference.release() })
+  await reference.ready
+  return { runtime, reference, mock, connection }
+}
+
+/** Paste through the real Lexical surface. jsdom does not implement editable beforeinput. */
+function composerIn(shell: HTMLElement): Promise<HTMLElement> {
+  return waitFor(() => {
+    const input = shell.querySelector<HTMLElement>('[data-composer-input][contenteditable="true"]')
+    if (input === null) throw new Error('Composer is unavailable')
+    return input
+  })
+}
+
+async function pasteDraft(shell: HTMLElement, text: string): Promise<void> {
+  const composer = await composerIn(shell)
+  fireEvent.paste(composer, { clipboardData: { items: [], getData: () => text } })
+  await waitFor(() => { expect(composer.textContent).toBe(text) })
+}
+
+function pushModelText(mock: AssembledRemote['mock'], index: number, text: string): void {
+  const attemptId = 'shared-attempt'
+  if (index === 0) {
+    expect(mock.streams.push('session/follow', {
+      type: 'event', event: { type: 'step/start', seq: 2, time: Date.now(), data: { turn: 0, step: 1 } },
+    })).toBe(1)
+    expect(mock.streams.push('session/follow', {
+      type: 'assistant-stream', frame: { type: 'start', attemptId, revision: 1, startedAfterSeq: 2, turn: 0, step: 1 },
+    })).toBe(1)
+  }
+  expect(mock.streams.push('session/follow', {
+    type: 'assistant-stream', frame: {
+      type: 'chunk', attemptId, index, revision: index + 2, time: Date.now(), chunk: { type: 'text-delta', index: 0, text },
+    },
+  })).toBe(1)
+}
+
+function pane(node: ReactNode): ReactNode {
+  return createElement('main', { 'data-testid': 'parallel-shell' }, node)
+}
+
+it('switches two native conversation panes with the same Session identity while both event streams stay attached', async () => {
+  const local = await openFixtureHost('fixture:local')
+  const remote = await openFixtureHost('fixture:remote')
+  const view = render(pane(local.runtime.renderPane(local.reference)))
+  const shell = view.getByTestId('parallel-shell')
+  const url = location.href
+  expect(local.reference.sessionId).toBe(remote.reference.sessionId)
+  expect(local.reference.binding).not.toBe(remote.reference.binding)
+
+  await pasteDraft(shell, 'local-only draft')
+  view.rerender(pane(remote.runtime.renderPane(remote.reference)))
+  await pasteDraft(shell, 'remote-only draft')
+  expect(view.getByTestId('parallel-shell')).toBe(shell)
+
+  const eventId = 'shared-approval'
+  const request = (toolName: string) => ({
+    type: 'waterfall', event: 'approval/request', eventId, agentId: sharedId,
+    request: { toolName },
+  })
+  await act(async () => {
+    expect(local.mock.streams.push('$events', request('local fixture'))).toBe(1)
+    expect(remote.mock.streams.push('$events', request('remote fixture'))).toBe(1)
+  })
+  expect(await view.findByText('Tool remote fixture requests privileged execution')).toBeTruthy()
+  expect(view.queryByText('Tool local fixture requests privileged execution')).toBeNull()
+  fireEvent.click(view.getByRole('button', { name: 'Allow once' }))
+  await waitFor(() => {
+    expect(remote.mock.log.calls('$events/result')).toHaveLength(1)
+    expect(remote.mock.log.calls('$events/result')[0]?.args).toMatchObject([
+      { eventId, outcome: { kind: 'result', value: 'allowed-once' } },
+    ])
+  })
+  expect(local.mock.log.calls('$events/result')).toHaveLength(0)
+  await waitFor(() => { expect(shell.querySelector('[data-composer-input]')?.textContent).toBe('remote-only draft') })
+
+  view.rerender(pane(local.runtime.renderPane(local.reference)))
+  expect(await view.findByText('Tool local fixture requests privileged execution')).toBeTruthy()
+  fireEvent.click(view.getByRole('button', { name: 'Reject' }))
+  await waitFor(() => {
+    expect(local.mock.log.calls('$events/result')).toHaveLength(1)
+    expect(local.mock.log.calls('$events/result')[0]?.args).toMatchObject([
+      { eventId, outcome: { kind: 'result', value: 'rejected' } },
+    ])
+    expect(shell.querySelector('[data-composer-input]')?.textContent).toBe('local-only draft')
+  })
+
+  for (const host of [local, remote]) {
+    expect(host.mock.log.streams('$events')).toEqual([expect.objectContaining({ state: 'open' })])
+    expect(host.mock.log.streams('session/follow').filter(stream => stream.state === 'open')).toHaveLength(1)
+  }
+  fireEvent.keyDown(await composerIn(shell), { key: 'Enter' })
+  await waitFor(() => { expect(local.mock.log.calls('session/prompt')).toHaveLength(1) })
+  expect(remote.mock.log.calls('session/prompt')).toHaveLength(0)
+  view.rerender(pane(remote.runtime.renderPane(remote.reference)))
+  fireEvent.keyDown(await composerIn(shell), { key: 'Enter' })
+  await waitFor(() => { expect(remote.mock.log.calls('session/prompt')).toHaveLength(1) })
+  await act(async () => {
+    pushModelText(local.mock, 0, 'local assistant chunk')
+    pushModelText(remote.mock, 0, 'remote assistant chunk')
+  })
+  expect(await view.findByText('remote assistant chunk')).toBeTruthy()
+  expect(view.queryByText('local assistant chunk')).toBeNull()
+  view.rerender(pane(local.runtime.renderPane(local.reference)))
+  expect(await view.findByText('local assistant chunk')).toBeTruthy()
+  expect(view.queryByText('remote assistant chunk')).toBeNull()
+
+  const localGeneration = local.connection.generation.getSnapshot()
+  expect(localGeneration).toBeDefined()
+  remote.reference.release()
+  await act(async () => { await remote.runtime.dispose() })
+  expect(remote.mock.log.streams('$events').some(stream => stream.state === 'open')).toBe(false)
+  expect(local.connection.generation.getSnapshot()).toBe(localGeneration)
+  expect(local.mock.log.streams('$events')).toEqual([expect.objectContaining({ state: 'open' })])
+  await act(async () => { pushModelText(local.mock, 1, ' after remote disconnect') })
+  expect(await view.findByText('local assistant chunk after remote disconnect')).toBeTruthy()
+  expect(view.getByTestId('parallel-shell')).toBe(shell)
+  expect(location.href).toBe(url)
+  view.unmount()
+}, 60_000)
+
+it('opens the native conversation with the factory’s curated local client modules', async () => {
+  const modules = createInProcessModules(graphFromRoster(webApp.rows), await loadPluginModules({ roster: webApp }))
+  const shell = new Context()
+  onTestFinished(() => shell.fiber.dispose())
+  const conversationVisible = createSnapshotStore(true)
+  shell.provide('shellConversationVisibility', conversationVisible)
+  provideHostRuntimeFactory(shell, modules)
+  const factory = shell.hostRuntimeFactory
+  const { mock } = createAssembledRemote()
+  vi.stubGlobal('__DSH_REMOTE_ACCESS__', { type: 'baseline', owner: true })
+  mock.stream('remoteAccess/follow', () => {})
+  const storage = createMemoryHostStorage()
+  storage.setItem('dsh.sessions.current', JSON.stringify({ sessionId: sharedId }))
+  const hostKey = brandString<HostKey>('fixture:curated')
+  const runtime = await factory.create({
+    hostKey,
+    connection: { transport: { rpc: mock.rpc } },
+    pageAccess: {
+      fetch: () => Promise.resolve(new Response(null, { status: 404 })),
+      resourceUrl: input => String(input),
+    },
+    storage,
+  })
+  factory.showPane(hostKey)
+
+  const connection = runtime.ctx.get('connection') as ConnectionHandle
+  expect(connection.isLoopback).toBe(false)
+  const promptAccess = runtime.ctx.remoteAccess.source('session', sharedId, 'session/prompt')
+  expect(promptAccess.getSnapshot()).toBe(false)
+  await waitFor(() => { expect(connection.state.getSnapshot()).toBe('connected') })
+  await waitFor(() => {
+    expect(mock.log.streams('remoteAccess/follow')).toEqual([expect.objectContaining({ state: 'open' })])
+  })
+  expect(mock.streams.push('remoteAccess/follow', { type: 'baseline', owner: true })).toBe(1)
+  await waitFor(() => { expect(promptAccess.getSnapshot()).toBe(true) })
+  const view = render(pane(runtime.renderPane()))
+  const element = view.getByTestId('parallel-shell')
+  await waitFor(() => {
+    expect(runtime.ctx.uiSession.adapter.current.getSnapshot().key).toBe(sharedId)
+    expect(mock.log.streams('session/follow')).toEqual([expect.objectContaining({ state: 'open' })])
+  })
+  expect(await composerIn(element)).toBeTruthy()
+  expect(runtime.ctx.get('sidebarRight')).toBeDefined()
+  expect(runtime.ctx.get('modules')).toBeUndefined()
+
+  await act(async () => {
+    conversationVisible.set(false)
+    for (const running of [true, false]) {
+      expect(mock.streams.push('$events', { type: 'emit', event: 'api-session/status', args: [sharedId, running] })).toBe(1)
+    }
+  })
+  const sessionStatus = () => runtime.ctx.uiSession.sessionStatus.getSnapshot().get(sharedId)
+  expect(factory.selectedHost.getSnapshot()).toBe(hostKey)
+  await waitFor(() => { expect(sessionStatus()?.completionUnread).toBe(true) })
+  act(() => { conversationVisible.set(true) })
+  await waitFor(() => { expect(sessionStatus()?.completionUnread).toBe(false) })
+
+  view.unmount()
+  await runtime.dispose()
+  expect(factory.selectedHost.getSnapshot()).toBeUndefined()
+  expect(mock.log.streams('$events').some(stream => stream.state === 'open')).toBe(false)
+}, 60_000)
+
+it('mounts the bundled SSH manager only in the local Desktop shell', async () => {
+  const entry = pathToFileURL(resolve('apps/desktop/remote-ssh/index.mjs')).href
+  const { apply } = await import(/* @vite-ignore */ entry)
+  const injections: { kind: string; text: string }[] = []
+  const host = {
+    effect: (register: () => unknown) => { register() },
+    on(event: string, callback: (rows: typeof injections) => void) {
+      if (event === 'webserver/index-inject') callback(injections)
+    },
+    inject(_services: string[], install: (scope: object) => void): void { install(host) },
+    connection: { admit() {}, browserPeer: {}, fetch: { register() {} } },
+    webServer: { host: '127.0.0.1', registerUpgrade: () => () => {} },
+  }
+  // Capture the actual bundled index injection, with no SSH process or remote JavaScript.
+  apply(host)
+  expect(injections).toHaveLength(1)
+  const provider = {} as Pick<Parameters<typeof installDesktopSsh>[2], '__DSH_SSH_PARALLEL__'>
+  Function('globalThis', injections[0]!.text)(provider)
+
+  const { mock } = createAssembledRemote()
+  mock.stream('$events', (_args, stream) => {
+    stream.push({ type: 'ready', clientId: 'fixture-local-ssh', host: { home: '/home/fixture' } })
+  })
+  vi.stubGlobal('__DSH_REMOTE_ACCESS__', { type: 'baseline', owner: true })
+  const roster = webApp.without(['@deepseek-ai/dsh-client-hmr'])
+  const modules = createInProcessModules(graphFromRoster(roster.rows), await loadPluginModules({
+    roster, provide: {
+      [connectionPackage]: {
+        apply: (scope: Context): void => {
+          installConnection(scope, { interactions: 'answer', transport: { rpc: mock.rpc } })
+        },
+      },
+    },
+  }))
+  const ctx = new Context()
+  onTestFinished(() => ctx.fiber.dispose())
+  ctx.provide('hostStorage', createMemoryHostStorage())
+  provideHostRuntimeFactory(ctx, modules)
+  await bootClient({ ctx, modules, manifest: modules.manifest })
+  const staticModules = getStaticModules()
+  const fetch = vi.fn(async (input: RequestInfo | URL) => {
+    expect(String(input)).toBe('dsh-app://app/api/remote-ssh/hosts')
+    return Response.json({ hosts: [{ id: 'fixture', label: 'Fixture SSH host', alias: 'fixture', instance: 'default' }] })
+  })
+  const win = {
+    ...provider, dshDesktop: { protocolVersion: 1 }, document: { baseURI: 'dsh-app://app/' },
+    __DSH_TRANSPORT__: { fetch },
+  }
+  await installDesktopSsh(ctx, staticModules, { ...win, location: { protocol: 'https:', hostname: 'app' } })
+  expect(ctx.slots.entries('main').every(row => row.options.key !== 'remote-host-ssh')).toBe(true)
+  await installDesktopSsh(ctx, staticModules, { ...win, location: { protocol: 'dsh-app:', hostname: 'app' } })
+  const container = document.body.appendChild(document.createElement('div'))
+  onTestFinished(() => { container.remove() })
+  await act(async () => { await mountClient(ctx, container) })
+  const shell = within(container)
+  fireEvent.click(await shell.findByRole('button', { name: '远程连接' }))
+  const manager = await shell.findByRole('region', { name: '远程连接' })
+  expect(await within(manager).findByText('Fixture SSH host')).toBeTruthy()
+  expect(fetch).toHaveBeenCalledTimes(1)
+}, 60_000)
+
+it('routes unified rows, background interactions and New Session commands to the owning Host', async () => {
+  const platform = Object.getOwnPropertyDescriptor(navigator, 'platform')
+  Object.defineProperty(navigator, 'platform', { configurable: true, value: 'Win32' })
+  onTestFinished(() => {
+    if (platform === undefined) Reflect.deleteProperty(navigator, 'platform')
+    else Object.defineProperty(navigator, 'platform', platform)
+  })
+  vi.stubGlobal('__DSH_REMOTE_ACCESS__', { type: 'baseline', owner: true })
+  const fixture = (name: string) => {
+    const { mock } = createAssembledRemote()
+    mock.stream('$events', (_args, stream) => {
+      stream.push({ type: 'ready', clientId: name, host: { home: '/home/fixture' } })
+    })
+    const storage = createMemoryHostStorage()
+    storage.setItem('dsh.sessions.current', JSON.stringify({ sessionId: sharedId }))
+    return { mock, storage }
+  }
+  const local = fixture('fixture-local-sidebar')
+  const connection = {
+    installConnection,
+    apply: (scope: Context): void => {
+      installConnection(scope, { interactions: 'answer', transport: { rpc: local.mock.rpc } })
+    },
+  }
+  const roster = webApp.without(['@deepseek-ai/dsh-client-hmr'])
+  const modules = createInProcessModules(graphFromRoster(roster.rows), await loadPluginModules({
+    roster, provide: { [connectionPackage]: connection },
+  }))
+  const ctx = new Context()
+  onTestFinished(() => ctx.fiber.dispose())
+  ctx.provide('hostStorage', local.storage)
+  provideHostRuntimeFactory(ctx, modules)
+  await bootClient({ ctx, modules, manifest: modules.manifest })
+  const factory = ctx.hostRuntimeFactory
+  const open = async (name: string, label: string) => {
+    const world = fixture(name)
+    const runtime = await factory.create({
+      hostKey: brandString<HostKey>(name), label, storage: world.storage,
+      connection: { transport: { rpc: world.mock.rpc } },
+      pageAccess: { fetch: () => Promise.resolve(new Response(null, { status: 404 })), resourceUrl: input => String(input) },
+    })
+    return { ...world, runtime }
+  }
+  const alpha = await open('fixture:alpha', 'SSH Alpha')
+  const beta = await open('fixture:beta', 'SSH Beta')
+  const view = render(pane(ctx.slots.renderSlot('root', {})))
+  const root = view.getByTestId('parallel-shell')
+  const workspaceId = 'fx-ws-fixture'
+  function row(host: string | undefined, key: string): HTMLElement {
+    const found = [...root.querySelectorAll<HTMLElement>(`[data-row-key="${key}"]`)]
+      .find(candidate => candidate.closest<HTMLElement>('[data-workspace-host]')?.dataset.workspaceHost === host)
+    if (found === undefined) throw new Error(`The requested row is absent: ${String(host)} ${key}`)
+    return found
+  }
+  const sessionKey = `session:${sharedId}`
+  for (const host of [undefined, 'SSH Alpha', 'SSH Beta']) {
+    const group = await waitFor(() => row(host, `workspace:${workspaceId}`))
+    if (group.getAttribute('aria-expanded') === 'false') fireEvent.click(group)
+    await waitFor(() => row(host, sessionKey))
+  }
+  expect(view.getAllByRole('tree')).toHaveLength(1)
+  expect(row(undefined, sessionKey).getAttribute('aria-selected')).toBe('true')
+  const eventId = 'fixture-shared-interaction'
+  await act(async () => {
+    expect(alpha.mock.streams.push('$events', {
+      type: 'waterfall', event: 'approval/request', eventId, agentId: sharedId,
+      request: { toolName: 'alpha-only command' },
+    })).toBe(1)
+    expect(beta.mock.streams.push('$events', {
+      type: 'waterfall', event: 'user-questions/request', eventId, agentId: sharedId,
+      request: { questions: [{ id: 'fixture-choice', question: 'Select the Beta response', options: [{ label: 'Beta only' }] }] },
+    })).toBe(1)
+  })
+  const status = (host: typeof alpha) => host.runtime.ctx.uiSession.sessionStatus.getSnapshot().get(sharedId)
+  await waitFor(() => {
+    expect(status(alpha)?.pendingInteraction?.kind).toBe('approval')
+    expect(status(beta)?.pendingInteraction?.kind).toBe('question')
+    expect(row('SSH Alpha', sessionKey).textContent).toContain('Waiting for approval')
+    expect(row('SSH Beta', sessionKey).textContent).toContain('Waiting for answer')
+  })
+  fireEvent.keyDown(await composerIn(root), { key: 'Enter' })
+  expect(alpha.mock.log.calls('$events/result')).toHaveLength(0)
+  expect(beta.mock.log.calls('$events/result')).toHaveLength(0)
+  expect(view.queryByText('Select the Beta response')).toBeNull()
+
+  fireEvent.click(row('SSH Beta', sessionKey))
+  expect(await view.findByText('Select the Beta response')).toBeTruthy()
+  expect(factory.selectedHost.getSnapshot()).toBe(beta.runtime.hostKey)
+  expect(row('SSH Beta', sessionKey).getAttribute('aria-selected')).toBe('true')
+  expect(row('SSH Alpha', sessionKey).getAttribute('aria-selected')).toBe('false')
+  expect(row(undefined, sessionKey).getAttribute('aria-selected')).toBe('false')
+  fireEvent.click(view.getByText('Beta only', { exact: true }))
+  fireEvent.click(view.getByRole('button', { name: /submit|send/i }))
+  await waitFor(() => {
+    const answers = beta.mock.log.calls('$events/result')
+    expect(answers).toHaveLength(1)
+    expect(answers[0]?.args).toMatchObject([{
+      eventId, outcome: { kind: 'result', value: { answers: [{ id: 'fixture-choice', selected: ['Beta only'] }] } },
+    }])
+  })
+  expect(alpha.mock.log.calls('$events/result')).toHaveLength(0)
+
+  const count = (mock: AssembledRemote['mock']): number => mock.log.calls('session/create').length
+  const counts = () => [count(local.mock), count(alpha.mock), count(beta.mock)] as const
+  const [localBefore, alphaBefore, betaBefore] = counts()
+  fireEvent.keyDown(document.body, { code: 'KeyN', key: 'n', ctrlKey: true, altKey: true })
+  await waitFor(() => { expect(counts()).toEqual([localBefore, alphaBefore, betaBefore + 1]) })
+  fireEvent.click(row('SSH Alpha', sessionKey))
+  expect(await view.findByText('Tool alpha-only command requests privileged execution')).toBeTruthy()
+  expect(factory.selectedHost.getSnapshot()).toBe(alpha.runtime.hostKey)
+  fireEvent.click(view.getByRole('button', { name: 'Reject' }))
+  await waitFor(() => { expect(alpha.mock.log.calls('$events/result')).toHaveLength(1) })
+  expect(beta.mock.log.calls('$events/result')).toHaveLength(1)
+  const newSession = view.getAllByRole('button', { name: 'New session' })
+    .find(button => button.textContent?.includes('New Session'))
+  if (newSession === undefined) throw new Error('The sidebar New Session action is absent')
+  fireEvent.click(newSession)
+  await waitFor(() => { expect(counts()).toEqual([localBefore, alphaBefore + 1, betaBefore + 1]) })
+  const alphaSession = await waitFor(() => {
+    const id = alpha.runtime.ctx.uiSession.adapter.current.getSnapshot().key
+    if (id === undefined || id === sharedId) throw new Error('The new Alpha Session is not selected')
+    return id
+  })
+  await pasteDraft(root, 'Alpha draft after reconnect')
+  const alphaConnection = alpha.runtime.ctx.get('connection') as ConnectionHandle
+  const localConnection = ctx.get('connection') as ConnectionHandle
+  const beforeReconnect = alphaConnection.generation.getSnapshot()
+  const localGeneration = localConnection.generation.getSnapshot()
+  fireEvent.click(row(undefined, sessionKey))
+  await waitFor(() => { expect(factory.selectedHost.getSnapshot()).toBeUndefined() })
+  act(() => { alphaConnection.reconnect() })
+  await waitFor(() => {
+    expect(alphaConnection.state.getSnapshot()).toBe('connected')
+    expect(alphaConnection.generation.getSnapshot()).toBeDefined()
+    expect(alphaConnection.generation.getSnapshot()).not.toBe(beforeReconnect)
+  })
+  expect(localConnection.generation.getSnapshot()).toBe(localGeneration)
+  expect(beta.mock.log.streams('$events')).toEqual([expect.objectContaining({ state: 'open' })])
+  fireEvent.click(await waitFor(() => row('SSH Alpha', `session:${alphaSession}`)))
+  await waitFor(() => { expect(root.querySelector('[data-composer-input]')?.textContent).toBe('Alpha draft after reconnect') })
+  fireEvent.keyDown(document.body, { code: 'KeyB', key: 'b', ctrlKey: true, altKey: true })
+  expect(await view.findByRole('button', { name: 'Open sidebar' })).toBeTruthy()
+  expect(factory.selectedHost.getSnapshot()).toBe(alpha.runtime.hostKey)
+  expect(view.getByTestId('parallel-shell')).toBe(root)
+  view.unmount()
+}, 60_000)

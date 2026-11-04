@@ -118,6 +118,13 @@ describe('facade surface', () => {
     expect(() => bench.facade.registry).toThrow(/any service your returned plugin declared in inject/)
   })
 
+  it('withholds Host runtime composition even from a declared client service', async () => {
+    const bench = await boot(['hostRuntimeFactory'], { hostRuntimeFactory: { create: vi.fn() } })
+    expect(() => bench.facade.get('hostRuntimeFactory')).toThrow(/reserved for the local shell/)
+    expect(() => bench.facade.hostRuntimeFactory).toThrow(/reserved for the local shell/)
+    expect('hostRuntimeFactory' in bench.facade).toBe(false)
+  })
+
   it('answers `get` and `has` over the same whitelist, and refuses writes', async () => {
     const bench = await boot(['slots'])
     expect(typeof bench.facade.get('slots')).toBe('object')

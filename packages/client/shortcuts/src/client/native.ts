@@ -13,11 +13,12 @@ import type { ShortcutRegistry } from './registry.ts'
  * @returns disposer releasing native input.
  */
 export function installNativeKeyboard(window: Window, keyboard: DesktopKeyboardApi, registry: ShortcutRegistry,
-  snapshot: () => ShortcutConfigSnapshot, reset?: () => void): () => void {
+  snapshot: () => ShortcutConfigSnapshot, reset?: () => void, routeHostPanes = false): () => void {
   return keyboard.subscribe((input) => {
     if (input.revision !== snapshot().revision) return
     reset?.()
     let target = window.document.activeElement
+    if (!routeHostPanes && target?.closest('[data-host-pane]') != null) return
     while (target?.shadowRoot?.activeElement != null && !target.matches('webview[data-sidebar-browser-frame]')) {
       target = target.shadowRoot.activeElement
     }

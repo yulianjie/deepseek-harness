@@ -29,7 +29,9 @@ This package is infrastructure: the web shell and the boot kernel are its only d
 
 ### What mounting does
 
-`mount(container)` installs the slot renderer, hydrates the existing boot DOM when present, renders the assembled application into the container before the next paint, and returns a disposer that unmounts the React root. The renderer performs the sole context-level `renderSlot('root')` call; the registered root occupant owns product layout and document metadata.
+`mount(container)` hydrates the existing boot DOM when present, renders the assembled application into the container before the next paint, and returns a disposer that unmounts the React root. The slot registry renders its root through `renderSlot('root')`; the registered root occupant owns the layout.
+
+A Host pane uses the same root renderer in the shell's existing React tree. An explicit Session reference resolves through the pane's own Session adapter, which checks its ownership. An explicit empty selection produces the pane's empty view.
 
 ### For business plugins
 

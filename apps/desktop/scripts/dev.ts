@@ -9,8 +9,9 @@ import { DESKTOP_HOST_PROTOCOL_VERSION } from '../src/host-protocol.ts'
 import type { DesktopRelease } from '../src/release.ts'
 import { developmentRuntimeDirectory, resolveDesktopBuildTarget } from './desktop-build-paths.mjs'
 import { prepareDevelopmentProject } from './development-project.ts'
-import { prepareDevelopmentApp } from './development-app.ts'
+import { developmentElectronEnvironment, prepareDevelopmentApp } from './development-app.ts'
 import { preparePrimaryRuntime } from './prepare-primary-runtime.ts'
+import { reusePrimaryRuntime } from './reuse-primary-runtime.ts'
 
 const APP_ROOT = resolve(import.meta.dirname, '..')
 const REPOSITORY_ROOT = resolve(APP_ROOT, '..', '..')
@@ -56,7 +57,7 @@ async function runPackageScript(script: string, cwd: string): Promise<void> {
   await run(process.execPath, [packageManager, 'run', script], cwd)
 }
 
-async function launchElectron(): Promise<void> {
+async function launchElectron(reusedPrimaryRuntime?: string): Promise<void> {
   const require = createRequire(import.meta.url)
   const electron: unknown = require('electron')
   if (typeof electron !== 'string') throw new Error('desktop development: electron executable is unavailable')
@@ -66,9 +67,9 @@ async function launchElectron(): Promise<void> {
   const home = resolve(process.env.DSH_HOME ?? join(DEVELOPMENT_ROOT, 'home'))
   const userData = resolve(process.env.DSH_DESKTOP_USER_DATA_DIR ?? join(DEVELOPMENT_ROOT, 'electron-user-data'))
   const environment: NodeJS.ProcessEnv = {
-    ...process.env,
+    ...developmentElectronEnvironment(process.env),
     DSH_HOME: home,
-    DSH_DESKTOP_PRIMARY_RUNTIME_DIR: process.env.DSH_DESKTOP_PRIMARY_RUNTIME_DIR ?? developmentRuntimeDirectory(),
+    DSH_DESKTOP_PRIMARY_RUNTIME_DIR: reusedPrimaryRuntime ?? process.env.DSH_DESKTOP_PRIMARY_RUNTIME_DIR ?? developmentRuntimeDirectory(),
     DSH_DESKTOP_HOST_INSPECT_PORT: String(hostPort),
     DSH_DESKTOP_OPEN_DEVTOOLS: process.env.DSH_DESKTOP_OPEN_DEVTOOLS ?? '1',
     ELECTRON_ENABLE_LOGGING: process.env.ELECTRON_ENABLE_LOGGING ?? '1',
@@ -91,7 +92,15 @@ async function launchElectron(): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  const { values } = parseArgs({ options: { 'skip-build': { type: 'boolean', default: false } } })
+  const { values } = parseArgs({ options: {
+    'skip-build': { type: 'boolean', default: false },
+    'reuse-primary-runtime': { type: 'string' },
+  } })
+  const runtimeSource = values['reuse-primary-runtime']
+  if (runtimeSource !== undefined && (process.platform !== 'win32' || process.arch !== 'x64'
+    || resolveDesktopBuildTarget() !== 'win-x64')) {
+    throw new Error('desktop development: primary runtime reuse requires a Windows x64 development target')
+  }
   if (!values['skip-build']) {
     await runPackageScript('build:artifacts', REPOSITORY_ROOT)
     await runPackageScript('build', APP_ROOT)
@@ -104,12 +113,16 @@ async function main(): Promise<void> {
   }
   const version = packageVersion(join(APP_ROOT, 'package.json'), 'desktop package')
   const pnpmVersion = packageVersion(join(APP_ROOT, 'node_modules', 'pnpm', 'package.json'), 'pnpm package')
+  const reusedPrimaryRuntime = runtimeSource === undefined ? undefined : await reusePrimaryRuntime({
+    appRoot: APP_ROOT, source: runtimeSource, version, pnpmVersion,
+    officeAssets: join(REPOSITORY_ROOT, 'packages', 'skill', 'skill-office', 'assets'),
+  })
   const release: DesktopRelease = {
     schemaVersion: 1,
     version,
     hostProtocolVersion: DESKTOP_HOST_PROTOCOL_VERSION,
     nodeVersion: execFileSync(createRequire(import.meta.url)('electron') as string, ['-p', 'process.versions.node'],
-      { encoding: 'utf8', env: { ...process.env, ELECTRON_RUN_AS_NODE: '1' } }).trim(),
+      { encoding: 'utf8', env: { ...developmentElectronEnvironment(process.env), ELECTRON_RUN_AS_NODE: '1' } }).trim(),
     pnpmVersion,
   }
   prepareDevelopmentProject({
@@ -120,8 +133,8 @@ async function main(): Promise<void> {
     release,
     target: resolveDesktopBuildTarget(),
   })
-  await preparePrimaryRuntime()
-  await launchElectron()
+  if (reusedPrimaryRuntime === undefined) await preparePrimaryRuntime()
+  await launchElectron(reusedPrimaryRuntime)
 }
 
 await main().catch((error: unknown) => {

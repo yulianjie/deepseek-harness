@@ -496,6 +496,10 @@ export interface ComposerBarOwnerProps {
 
 /** Package-private operations injected into the resident composer bar. */
 export interface ComposerBarInjected {
+  /** Require a trusted chooser change for file intake in a separate Host. */
+  pickerOnly?: boolean
+  /** Recheck this Host's foreground state when a drop or file paste reaches a mounted composer. */
+  canIntakeAmbientFiles?: (() => boolean) | undefined
   keyboard: ComposerKeyboard | undefined
   /**
    * Register one picked batch; resolves to the rejection copy or null. Where

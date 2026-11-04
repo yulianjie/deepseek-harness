@@ -27,6 +27,8 @@ English | [中文](README.zh.md)
 
 Users switch the color scheme, font sizes, and fonts from rows in Settings (General section); the choices persist across restarts in every authenticated browser. Feature plugins consume the current snapshot through `ctx.theme` and read the `--dsw-*` tokens in CSS; they do not manage theme state themselves.
 
+An embedded Host with `presentation: 'pane'` keeps a theme snapshot for its own controls. The outer shell owns the global stylesheets, theme settings rows, and window font shortcuts.
+
 ### Appearance and font size
 
 The plugin registers Appearance preference cubes and the text font-size stepper in the General section. A More font settings button after the stepper expands a region below it, collapsed on every settings open, with a font row for each of text, code, and the terminal, plus the code and terminal font-size steppers. The text stepper accepts integer values from 10 through 22 px and defaults to 14 px. It changes conversation headings and base text by the same increment, including the user bubble and composer draft; flow-row titles, summaries, and tables follow one step under the body size, while small text keeps a fixed size. The code stepper (10–16 px, default 11) sets the code-block size; inline code stays 1 px larger, and the small tool-output variant uses the same size. The terminal stepper (10–20 px, default 13) sets the sidebar terminal cell font size; changing it keeps the shell and output and refits the grid. Each accepted change writes through the Host settings API. Rapid changes serialize in gesture order with namespace revisions, and a rejected latest write reloads the durable values.

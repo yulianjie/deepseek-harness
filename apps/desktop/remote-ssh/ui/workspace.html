@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta name="color-scheme" content="dark">
+  <title>远程工作区 · DeepSeek Harness</title>
+  <link rel="stylesheet" href="/remote-ssh/workspace.css">
+  <script src="/remote-ssh/workspace.js" type="module"></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="mark" aria-hidden="true">›_</div>
+      <div>
+        <div class="eyebrow">DEEPSEEK HARNESS</div>
+        <h1>远程工作区</h1>
+      </div>
+    </div>
+    <div class="host-summary">
+      <span class="host-state" id="host-state">正在验证远程实例</span>
+      <a class="button primary" href="/" target="_blank" rel="noopener noreferrer">打开远程 Harness ↗</a>
+    </div>
+  </header>
+
+  <main>
+    <section class="setup" aria-labelledby="project-title">
+      <div class="setup-title">
+        <p class="eyebrow">REMOTE / WORKSPACE</p>
+        <h2 id="project-title">项目目录</h2>
+        <p id="host-details" class="muted">正在读取远程实例信息…</p>
+      </div>
+      <form id="root-form" class="root-form">
+        <label for="root-path">远程绝对路径</label>
+        <div class="controls">
+          <input id="root-path" type="text" autocomplete="off" spellcheck="false" placeholder="/home/user/project" required>
+          <button type="submit" data-remote>打开目录</button>
+          <button type="button" id="home" data-remote>主目录</button>
+        </div>
+      </form>
+    </section>
+
+    <div id="notice" role="status" aria-live="polite" hidden></div>
+    <div class="workbench">
+      <section class="panel tree" aria-labelledby="tree-title">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow">EXPLORER</p>
+            <h2 id="tree-title">远程文件</h2>
+          </div>
+          <button id="refresh" type="button" data-remote>刷新</button>
+        </div>
+        <nav id="breadcrumbs" aria-label="当前目录"></nav>
+        <div class="file-controls controls">
+          <button id="new-file" type="button" data-remote>新建文件</button>
+          <button id="new-directory" type="button" data-remote>新建文件夹</button>
+        </div>
+        <p class="muted tree-empty" id="tree-empty">选择目录后即可浏览文件。</p>
+        <ul id="entries" aria-label="目录内容"></ul>
+      </section>
+
+      <section class="panel detail" aria-label="文件编辑与 Git">
+        <div class="mode" role="group" aria-label="工作区视图">
+          <button id="edit-tab" type="button" aria-pressed="true">编辑器</button>
+          <button id="git-tab" type="button" aria-pressed="false">Git</button>
+        </div>
+        <section id="editor-view" aria-label="文本编辑器">
+          <div class="empty" id="editor-empty">
+            <p class="eyebrow">TEXT EDITOR</p>
+            <h2>选一个文件开始</h2>
+            <p class="muted">文本保存在远程工作区。保存时会检查服务器上的文件版本。</p>
+          </div>
+          <div id="editor" hidden>
+            <div class="panel-head editor-head">
+              <div class="path-group">
+                <h2 id="editor-path"></h2>
+                <p id="editor-status" class="muted"></p>
+              </div>
+              <div class="controls">
+                <button id="reload-file" type="button" data-remote>重新读取</button>
+                <button id="save-file" type="button" class="primary" data-remote>保存</button>
+              </div>
+            </div>
+            <p class="conflict" id="conflict" hidden>远程版本已变更，本次保存未写入。当前编辑内容仍在此处，可以先复制，再重新读取远程版本。</p>
+            <textarea id="content" aria-label="远程文件内容" spellcheck="false" autocomplete="off" autocapitalize="off"></textarea>
+          </div>
+        </section>
+        <section id="git-view" aria-label="远程 Git" hidden>
+          <div class="panel-head editor-head">
+            <div>
+              <h2>远程 Git</h2>
+              <p class="muted">状态和差异以当前远程项目为准。</p>
+            </div>
+          </div>
+          <form id="git-form" class="git-controls controls">
+            <label for="git-path">文件范围
+              <input id="git-path" type="text" placeholder="整个项目" autocomplete="off" spellcheck="false">
+            </label>
+            <label class="check"><input id="git-staged" type="checkbox"> 已暂存</label>
+            <button type="submit" id="git-status" value="status" data-remote>状态</button>
+            <button type="submit" id="git-diff" value="diff" data-remote>差异</button>
+          </form>
+          <pre id="git-output" tabindex="0">选择“状态”或“差异”以查询远程仓库。</pre>
+        </section>
+      </section>
+    </div>
+  </main>
+
+  <dialog id="create-dialog">
+    <form id="create-form">
+      <p class="eyebrow">REMOTE / NEW</p>
+      <h2 id="create-title"></h2>
+      <label for="new-name">名称</label>
+      <input id="new-name" type="text" autocomplete="off" spellcheck="false" maxlength="255" required>
+      <div class="controls">
+        <button id="cancel-create" type="button">取消</button>
+        <button type="submit" class="primary">继续</button>
+      </div>
+    </form>
+  </dialog>
+</body>
+</html>

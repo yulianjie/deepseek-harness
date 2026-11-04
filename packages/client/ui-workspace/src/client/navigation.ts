@@ -12,7 +12,7 @@ import type {
 } from '@deepseek-ai/dsh-api-session-controller/client'
 // Type-only: pulls the `agentPreset` Session projection value into this program.
 import type {} from '@deepseek-ai/dsh-agent-preset-registry/types'
-import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
+import { createSnapshotStore, type SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { SubagentAddress } from '@deepseek-ai/dsh-subagent/client'
 import type {
   IWorkspaces, WorkspaceId, WorkspaceSnapshot, WorkspaceView,
@@ -157,9 +157,7 @@ class UiWorkspaceService extends Service implements UiWorkspace {
     readonly attempt: Promise<SessionId>
   }>()
   private readonly lifetime = new AbortController()
-  private readonly selection = createSnapshotStore<MainSelection>(
-    {}, { persist: { name: 'dsh.sessions.current' } },
-  )
+  private readonly selection: SnapshotStore<MainSelection>
   private mainReference: SessionReference | undefined
 
   /**
@@ -179,6 +177,9 @@ class UiWorkspaceService extends Service implements UiWorkspace {
     private readonly notify: (toast: RowToast) => void,
   ) {
     super(ctx, 'uiWorkspace')
+    this.selection = createSnapshotStore<MainSelection>(
+      {}, { persist: { name: 'dsh.sessions.current', storage: ctx.get('hostStorage') } },
+    )
     ctx.effect(() => {
       const stop = this.watchNavigation()
       return () => {

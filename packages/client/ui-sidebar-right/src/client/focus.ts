@@ -68,9 +68,10 @@ export function visibleSidebarPane(document: Document, sessionId: SessionId, pan
 /**
  * Observe pane focus and retain it when its DOM node is replaced, preserving text selections.
  * @param document - product document whose sidebar owns the listener lifetime.
+ * @param canFocus - whether this Host still owns focus, or absence for a single Host document.
  * @returns disposer for every document/window listener.
  */
-export function observeSidebarFocus(document: Document): () => void {
+export function observeSidebarFocus(document: Document, canFocus?: () => boolean): () => void {
   let active = true
   let focused: { element: Element; sessionId: SessionId; paneId: PaneId; occurrence: string | undefined } | undefined
   const removal = new MutationObserver(() => {
@@ -78,7 +79,7 @@ export function observeSidebarFocus(document: Document): () => void {
     const previous = focused
     focused = undefined
     removal.disconnect()
-    if (document.activeElement !== document.body) return
+    if (canFocus?.() === false || document.activeElement !== document.body) return
     const moved = previous.occurrence === undefined ? undefined
       : [...document.querySelectorAll<HTMLElement>('[data-sidebar-right-occurrence]')]
         .find(marker => marker.dataset.sidebarRightOccurrence === previous.occurrence)
@@ -89,6 +90,7 @@ export function observeSidebarFocus(document: Document): () => void {
   const capture = (): void => {
     removal.disconnect()
     focused = undefined
+    if (canFocus?.() === false) return
     const element = document.activeElement
     const pane = element?.closest<HTMLElement>('[data-dockkit-pane], [data-dockkit-float]')
     if (element === null || pane === undefined || pane === null) return
@@ -109,6 +111,7 @@ export function observeSidebarFocus(document: Document): () => void {
     if (event.relatedTarget === null && focused?.element.isConnected) { focused = undefined; removal.disconnect() }
   }
   const pointer = (event: PointerEvent): void => {
+    if (canFocus?.() === false) return
     const element = event.composedPath().find(value => value instanceof Element)
     if (!(element instanceof Element)) return
     const pane = element.closest<HTMLElement>('[data-sidebar-right-session] [data-dockkit-pane], [data-sidebar-right-session] [data-dockkit-float]')

@@ -26,6 +26,9 @@
       "path": "../../../vendor/schemastery"
     },
     {
+      "path": "../store"
+    },
+    {
       "path": "../../attachment/attachment"
     },
     {

@@ -19,6 +19,8 @@ export type ShortcutResolution = { status: 'handled'; run(): void }
 /** One command's labels, defaults, input ownership, and target resolver. */
 export interface ShortcutCommand {
   readonly id: ShortcutCommandId
+  /** Resolve this command in the conversation Host when one is foregrounded. */
+  readonly hostScoped?: boolean
   readonly label: () => string
   readonly aliases: readonly string[]
   readonly defaults: Readonly<Partial<Record<ShortcutProfile, ShortcutBinding>>>
@@ -98,7 +100,11 @@ export interface Shortcuts {
    * @param listener - owner handler; composing or consumed input must not trigger actions.
    * @returns disposer releasing the handler.
    */
-  observeFixedInput(listener: (input: ShortcutFixedInput) => void): () => void
+  observeFixedInput(listener: (input: ShortcutFixedInput) => void, scope?: 'host'): () => void
+  /** Resolve a shell-matched command against this Host's registered behavior. */
+  resolveHostCommand?(id: ShortcutCommandId, context: ShortcutContext): ShortcutResolution
+  /** Deliver fixed input to the foreground Host without a second window listener. */
+  receiveHostFixedInput?(input: ShortcutFixedInput): void
   /**
    * Describe a candidate using the device's physical-key and reservation rules; invalid codes throw.
    * @param binding - candidate combination, or null for an unbound command.

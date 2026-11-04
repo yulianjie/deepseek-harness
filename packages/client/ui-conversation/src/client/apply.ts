@@ -9,6 +9,7 @@ import { resolveSlotLabel } from '@deepseek-ai/dsh-client-ui-slots'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 // Type-only service and declaration merges used by this assembly.
 import type {} from '@deepseek-ai/dsh-client-locale/client'
+import type {} from '@deepseek-ai/dsh-client-file-upload/client'
 import type {} from '@deepseek-ai/dsh-client-ui-renderer/client'
 import type {} from '@deepseek-ai/dsh-client-ui-session/client'
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
@@ -187,7 +188,10 @@ export function apply(ctx: Context, config: Config = Config({})): void {
 
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'ui-conversation: dictionaries')
   const t = ctx.locale.bind(NS)
-  const conversationStore = createConversationStore()
+  const storage = ctx.get('hostStorage')
+  const foreground = ctx.get('hostForeground')
+  const canIntakeAmbientFiles = foreground === undefined ? undefined : () => foreground.getSnapshot()
+  const conversationStore = createConversationStore(storage)
   const submissionPolicy = new ComposerSubmissionPolicy(
     ctx.configForms.get<ConversationSettings>(CONVERSATION_SETTINGS_NAMESPACE),
   )
@@ -223,7 +227,7 @@ export function apply(ctx: Context, config: Config = Config({})): void {
     if (active !== undefined) uiConversation.binding(sessionId).activate(active.id)
   }
   const restoreView = (sessionId: SessionId): void => {
-    activateView(sessionId, readConversationViewPreference(sessionId))
+    activateView(sessionId, readConversationViewPreference(sessionId, storage))
   }
   const conversationViews = createSnapshotStore<readonly ViewTab[]>(viewTabs())
   const viewPins = createViewPins()
@@ -298,7 +302,7 @@ export function apply(ctx: Context, config: Config = Config({})): void {
     }, 'ui-conversation: fixed stop reference')
   })
 
-  const inputHub = new InputHub(ctx, t)
+  const inputHub = new InputHub(ctx, t, storage)
   const composerBlocks = new ComposerBlockRegistry()
 
   ctx.inject(['commandUi'], (scope) => {
@@ -490,9 +494,12 @@ export function apply(ctx: Context, config: Config = Config({})): void {
       const conversation = concreteConversation(ctx)
       const shell = inputHub.shell(sessionId)
       const inputTriggers = inputHub.inputTriggers(sessionId)
-      const bridge = hostPathBridge()
+      const pickerOnly = ctx.get('fileUploadTransport') !== undefined
+      const bridge = pickerOnly ? undefined : hostPathBridge()
       return {
         keyboard: shell,
+        pickerOnly,
+        canIntakeAmbientFiles,
         addFiles: (files, directories = new Set()) => {
           if (sessions.binding(sessionId) === undefined) return t('file.sessionUnavailable')
           if (shell.snapshot.phase === 'adjudicating' || shell.snapshot.phase === 'submitting') {

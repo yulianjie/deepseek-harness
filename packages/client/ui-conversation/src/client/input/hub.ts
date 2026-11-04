@@ -15,7 +15,7 @@ import type {
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-locale/client'
 import type { InboxState } from '@deepseek-ai/dsh-agent/types'
-import type { ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
+import type { HostStorage, ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
 import type {
   DraftAttachmentId, DraftAttachmentSerializationResult, DraftInitializationOptions, DraftInitializationResult, InputTriggerController,
   SessionInputResolver, SessionInput, SubmitOutcome,
@@ -58,10 +58,12 @@ export class InputHub implements SessionInputResolver {
   /**
    * @param ctx - client root context (services resolved lazily per call — boot order stays free).
    * @param t - conversation-namespace translate thunk (reads the active locale at call time).
+   * @param storage - Host backend, or absence for ordinary browser storage.
    */
   constructor(
     private readonly rootCtx: Context,
     private readonly t: TranslateNS<'conversation'>,
+    private readonly storage?: HostStorage,
   ) {}
 
   /**
@@ -170,7 +172,7 @@ export class InputHub implements SessionInputResolver {
         return () => { shell.refreshLexiconSubscription() }
       }, 'conversation.input: reference catalogs')
     })
-    shell.setDraft(readConversationDraft(binding.sessionId))
+    shell.setDraft(readConversationDraft(binding.sessionId, this.storage))
     return shell
   }
 

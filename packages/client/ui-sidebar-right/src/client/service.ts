@@ -35,7 +35,7 @@
  */
 import { sidebarTargetFromElement, type SidebarRightTarget } from './focus.ts'
 import { randomUUID } from '@deepseek-ai/dsh-util-crypto'
-import { createSnapshotStore, type ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
+import { createSnapshotStore, type HostStorage, type ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
 import type { FloatRect, PaneId, TabId, TabRecord } from '@deepseek-ai/dsh-client-ui-dockkit'
 import { activeDockPaneId, canSplit, findContentTab, findPaneContentTab, dockPaneIds, findTabPane, getPane } from '@deepseek-ai/dsh-client-ui-dockkit'
 import type { BoundActions } from '@deepseek-ai/dsh-client-ui-slots'
@@ -85,9 +85,12 @@ interface SidebarRightSessions {
  * @param tabs - registered tab types.
  * @param pin - resource retention for an occurrence's lifetime.
  * @param host - the viewport rule and focus continuity the commands use.
+ * @param storage - Host backend, or absence for ordinary browser storage.
  * @returns the controller; store adoption and scope removal; naming the on-screen Session; and recording a seat's room rule.
  */
-export function createSidebarRightController(tabs: SidebarRightTabRegistry, pin: PinResource, host: SidebarRightHost): {
+export function createSidebarRightController(
+  tabs: SidebarRightTabRegistry, pin: PinResource, host: SidebarRightHost, storage?: HostStorage,
+): {
   controller: SidebarRightController
   adopt: (sessionId: SessionId, store: SidebarRightSurfaceStore) => () => void
   forget: (sessionId: SessionId) => void
@@ -97,7 +100,7 @@ export function createSidebarRightController(tabs: SidebarRightTabRegistry, pin:
   const adopted = new Map<SessionId, Adoption>()
   const rooms = new Map<SessionId, RoomRule>()
   const onScreen = createSnapshotStore<SessionId | undefined>(undefined)
-  const inventory = new SidebarTabInventory()
+  const inventory = new SidebarTabInventory(storage)
   const controller = new SidebarRightController(tabs, pin, host, { adopted, rooms, onScreen, openTabs: inventory.source })
   return {
     controller,

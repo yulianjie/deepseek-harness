@@ -1,5 +1,5 @@
 /** Per-session Conversation store shared by the shell body and header. */
-import { defineStore, type EngineStoreHandle } from '@deepseek-ai/dsh-client-store'
+import { defineStore, resolveHostStorage, type EngineStoreHandle, type HostStorage } from '@deepseek-ai/dsh-client-store'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { ConversationStoreState } from './contract/views.ts'
 import type { DraftInput, DraftSnapshot } from './contract/draft-editor.ts'
@@ -17,9 +17,10 @@ type ConversationActions = {
 
 /**
  * Declare per-session draft persistence and View selection.
+ * @param storage - Host backend, or absence for ordinary browser storage.
  * @returns the store handle.
  */
-export function createConversationStore(): EngineStoreHandle<ConversationStoreState, ConversationActions> {
+export function createConversationStore(storage?: HostStorage): EngineStoreHandle<ConversationStoreState, ConversationActions> {
   return defineStore({
     init: (): ConversationStoreState => ({ draft: '', view: null, viewRequest: null }),
     persist: CONVERSATION_STORE_KEY,
@@ -32,20 +33,20 @@ export function createConversationStore(): EngineStoreHandle<ConversationStoreSt
       },
       completeViewRequest: (d) => { d.viewRequest = null },
     },
-  })
+  }, storage)
 }
 
 /**
  * Read a Session's draft before its input source is published to React.
  * @param sessionId - Session-scoped persistence suffix.
+ * @param storage - Host backend, or absence for ordinary browser storage.
  * @returns saved semantic content, or an empty document when storage is absent or invalid.
  */
-export function readConversationDraft(sessionId: SessionId): DraftSnapshot {
+export function readConversationDraft(sessionId: SessionId, storage?: HostStorage): DraftSnapshot {
   const empty: DraftSnapshot = { text: '', references: [] }
-  if (typeof localStorage === 'undefined') return empty
   try {
-    const raw = localStorage.getItem(`${CONVERSATION_STORE_KEY}.${sessionId}`)
-    if (raw === null) return empty
+    const raw = resolveHostStorage(storage)?.getItem(`${CONVERSATION_STORE_KEY}.${sessionId}`)
+    if (raw == null) return empty
     const stored: unknown = JSON.parse(raw)
     if (typeof stored !== 'object' || stored === null || !('draft' in stored)) return empty
     return parseStoredDraft(stored.draft) ?? empty
@@ -58,17 +59,17 @@ export function readConversationDraft(sessionId: SessionId): DraftSnapshot {
 /**
  * Read the persisted View preference before the Slot store is materialized.
  * @param sessionId - Session-scoped persistence suffix.
+ * @param storage - Host backend, or absence for ordinary browser storage.
  * @returns the preferred View id, or null when storage has no usable value.
  */
-export function readConversationViewPreference(sessionId: SessionId): string | null {
-  if (typeof localStorage === 'undefined') return null
+export function readConversationViewPreference(sessionId: SessionId, storage?: HostStorage): string | null {
   try {
-    const raw = localStorage.getItem(`${CONVERSATION_STORE_KEY}.${sessionId}`)
-    if (raw === null) return null
+    const raw = resolveHostStorage(storage)?.getItem(`${CONVERSATION_STORE_KEY}.${sessionId}`)
+    if (raw == null) return null
     const stored: unknown = JSON.parse(raw)
     if (typeof stored !== 'object' || stored === null || !('view' in stored)) return null
     return typeof stored.view === 'string' ? stored.view : null
-  } catch {
+  } catch (_storageUnavailable) {
     return null
   }
 }

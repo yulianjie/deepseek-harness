@@ -47,9 +47,10 @@ export const inject = ['slots', 'locale', 'uiConversation', 'remote', 'remote.se
  * @param ctx - client root context.
  */
 export function apply(ctx: ClientContext): void {
-  const opener = new PresentedOpenController()
-  const summaries = new ChangesSummaryStore()
-  const diffs = new ChangesDiffStore()
+  const pageAccess = ctx.get('hostPageAccess')
+  const opener = new PresentedOpenController(pageAccess !== undefined)
+  const summaries = new ChangesSummaryStore(pageAccess?.fetch)
+  const diffs = new ChangesDiffStore(pageAccess?.fetch)
   ctx.effect(() => () => Promise.all([opener.dispose(), summaries.dispose(), diffs.dispose()]))
   ctx.on('connection/reset', () => {
     opener.resetHost()

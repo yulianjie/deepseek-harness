@@ -302,6 +302,8 @@ export interface PerformanceUsageInjected {
 
 /** Business callbacks injected into the Chat view. */
 export interface ChatViewInjected {
+  /** Qualify a document-relative file media route for the owning Host. */
+  resourceUrl?: ((input: string) => string) | undefined
   hooks: {
     /** Live presentation policy derived from the accepted work-details mode. */
     presentation: ObservableSnapshot<ChatPresentationPolicy>
@@ -330,6 +332,10 @@ export interface ChatViewInjected {
   forkAt: (seq: number) => void
   fileMentions: (owner: TurnTailOwnerProps) => MarkdownFileMentions | undefined
 }
+
+/** The current connection generation invalidates document media URLs after reconnect. */
+export type HostMediaHooks = { hostMediaGeneration: ObservableSnapshot<unknown> }
+
 
 /** Existing Session-owned node sources shared by the view and its flow renderer. */
 export type ChatFlowDataInjected = Pick<ChatViewInjected, 'hooks' | 'keyedHooks'>

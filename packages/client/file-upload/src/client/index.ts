@@ -3,14 +3,17 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { FileUploadRuntime } from './runtime.ts'
 import type { FileUploadService } from './contract.ts'
+import type { ClientFileUploadHooks } from '../types.ts'
 
 export type { FileUploadProgress, FileUploadService } from './contract.ts'
-export type { FileUploadReceiptId, FileUploadValue } from '../types.ts'
+export type { ClientFileUploadHooks, FileUploadFetch, FileUploadReceiptId, FileUploadValue } from '../types.ts'
 
 declare module '@deepseek-ai/cordis' {
   interface Context {
     /** Session-addressed browser service for staged file uploads. */
     fileUpload: FileUploadService
+    /** Optional per-Host upload carrier installed before Client composition. */
+    fileUploadTransport?: ClientFileUploadHooks
   }
 }
 
@@ -22,5 +25,5 @@ export const inject = ['remote']
  * @param ctx - Client plugin context.
  */
 export function apply(ctx: Context): void {
-  ctx.plugin(FileUploadRuntime)
+  ctx.plugin(FileUploadRuntime, ctx.get('fileUploadTransport'))
 }

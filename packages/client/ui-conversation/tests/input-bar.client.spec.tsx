@@ -106,6 +106,7 @@ interface BenchOptions {
   /** Upload states served for file-kind drafts (absent = every file is ready). */
   fileUploads?: DraftFileUploads
   addFiles?: (files: readonly File[], directories?: ReadonlySet<File>) => string | null
+  canIntakeAmbientFiles?: () => boolean
   commandMenuOpen?: boolean
   busyEnter?: 'queue' | 'steer'
   toggleCommandMenu?: (selection: { start: number; end: number }) => void
@@ -202,6 +203,7 @@ function bench(over?: BenchOptions) {
     inputActions: shell.actions,
     keyboard: shell,
     addFiles: over?.addFiles ?? (() => null),
+    canIntakeAmbientFiles: over?.canIntakeAmbientFiles,
     useFileUploads: bindSnapshotSelector(createSnapshotStore<DraftFileUploads>(over?.fileUploads ?? {})),
     retryFileUpload: undefined,
     removeAttachment,
@@ -605,6 +607,27 @@ describe('image draft rail', () => {
     act(() => { attachmentOwner(result.slotCalls).onAddFiles([folder, note], new Set([folder])) })
     expect(addFiles).toHaveBeenCalledWith([folder, note], new Set([folder]))
     expect(result.view.getByRole('alert').textContent).toContain('只有桌面端支持添加文件夹')
+  })
+
+  it('refuses a drop or file paste after the composer Host moves to the background', () => {
+    const foreground = createSnapshotStore(true)
+    const addFiles = vi.fn(() => null)
+    const { textarea, slotCalls } = bench({ addFiles, canIntakeAmbientFiles: () => foreground.getSnapshot() })
+    const { onAddFiles } = attachmentOwner(slotCalls)
+    const file = new File(['one'], 'file.txt', { type: 'text/plain' })
+    foreground.set(false)
+    act(() => { onAddFiles([file]) })
+    fireEvent.paste(textarea, {
+      clipboardData: {
+        items: [{ kind: 'file', type: file.type, getAsFile: () => file }],
+        getData: () => '',
+      },
+    })
+    expect(addFiles).not.toHaveBeenCalled()
+
+    foreground.set(true)
+    act(() => { onAddFiles([file]) })
+    expect(addFiles).toHaveBeenCalledExactlyOnceWith([file], undefined)
   })
 
   it('announces server attachment rejections as product copy, other codes as developer text', () => {

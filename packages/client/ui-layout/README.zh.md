@@ -31,6 +31,8 @@ kind: "package-reference"
 
 全局面板占据 root 作用域的 `main` keyed slot；`conversation` 是为会话界面保留的 key。`ctx.layout.selectPanel(id)` 选中已注册面板，`null` 则选中会话界面，但不改变当前会话。Plugins 页面是默认组合中的一个全局面板。
 
+Host 面板组合使用 `presentation: 'pane'`，在现有外壳内呈现会话界面和右栏。左侧栏、窗口标题栏、文档标题和文档主题由外层外壳负责。设置等外壳面板会隐藏选中的 Host 面板。期间完成的会话保持未读，直到会话界面重新显示。启用 `workspaceProjection` 时，面板还通过同一个注册表提供该 Host 的工作区浏览器，外壳侧栏将其呈现在共享列表中。
+
 root 作用域的单一 `shell.bottom` slot 横跨三列下方的整行。占用方控制自身高度与显隐；三列按该高度缩短，空内容不预留空间。切换主面板时保留底部组件。列宽拖拽手柄止于底部内容上方，`shell.overlay` 仍覆盖整个框架。默认组合不占用此 slot。
 
 <a id="window-chrome-seat"></a>

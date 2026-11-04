@@ -9,6 +9,7 @@ interface AnimatedRowsProps {
   children: ReactNode
   className: string
   label: string
+  embedded?: boolean
   /** Unique DOM-order keys matching the rendered data-row-key attributes. */
   rowKeys: readonly string[]
   ready: boolean
@@ -170,7 +171,7 @@ export class AnimatedRows extends Component<AnimatedRowsProps> {
       <div
         ref={this.list}
         className={this.props.className}
-        role="tree"
+        role={this.props.embedded ? 'group' : 'tree'}
         aria-label={this.props.label}
         onPointerDownCapture={() => { this.armed = true }}
         onKeyDownCapture={() => { this.armed = true }}

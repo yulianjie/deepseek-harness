@@ -5,7 +5,7 @@
  * register() receives the factory and the browser derives its PropsStore
  * share from the return type.
  */
-import { defineStore, type EngineStoreHandle } from '@deepseek-ai/dsh-client-store'
+import { defineStore, type EngineStoreHandle, type HostStorage } from '@deepseek-ai/dsh-client-store'
 import type { SessionListState } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import { reconcileManualOrder, type ArchivedFilter, type SessionRowState } from './tree.ts'
@@ -77,9 +77,10 @@ function copySessionOrders(
 
 /**
  * Create the workspace browser viewing store handle.
+ * @param storage - Host backend, or absence for ordinary browser storage.
  * @returns the store handle (spec + type + identity + factory in one).
  */
-export function createWorkspaceViewStore(): EngineStoreHandle<WorkspaceViewState, WorkspaceViewActions> {
+export function createWorkspaceViewStore(storage?: HostStorage): EngineStoreHandle<WorkspaceViewState, WorkspaceViewActions> {
   return defineStore({
     init: (): WorkspaceViewState => ({
       groupBy: 'workspace',
@@ -126,7 +127,7 @@ export function createWorkspaceViewStore(): EngineStoreHandle<WorkspaceViewState
       },
       setArchivedFilter: (d, filter: ArchivedFilter) => { d.archivedFilter = filter },
     },
-  })
+  }, storage)
 }
 
 /** The bound write set of one viewing-store instance (what the UiWorkspace service drives). */

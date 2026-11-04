@@ -29,7 +29,9 @@ kind: "package-reference"
 
 ### 挂载做什么
 
-`mount(container)` 会安装 slot 渲染器、在存在时 hydrate 现有启动 DOM、在下一次绘制前把组装后的应用渲染进容器，并返回一个卸载 React 根的 disposer。渲染器执行全程序唯一一次上下文级 `renderSlot('root')` 调用；注册的根占用方拥有产品布局与文档元数据。
+`mount(container)` 在存在时 hydrate 现有启动 DOM，在下一次绘制前把组装后的应用渲染进容器，并返回卸载 React 根的 disposer。slot 注册表通过 `renderSlot('root')` 呈现其根，布局归注册的根占用方管理。
+
+Host 面板在外壳现有的 React 树内使用同一根渲染器。显式传入的会话引用由该面板的会话适配器解析并核对归属。显式传入空选择时显示面板的空视图。
 
 ### 对业务插件
 

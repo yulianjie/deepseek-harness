@@ -135,6 +135,16 @@ async function keyboardTheme(host = stubConfigForm<ThemeSettings>()) {
 }
 
 describe('ui-theme apply', () => {
+  it('provides a pane snapshot without installing shell settings or font shortcuts', async () => {
+    const { ctx, slots } = await bench(false)
+    const keyboard = fontKeyboard(ctx)
+    declareItems(slots)
+    await ctx.plugin({ inject: [...inject], apply }, { presentation: 'pane' }).await()
+    expect(ctx.get('theme')?.getTheme().fontSizes.text).toBe(14)
+    expect(slots.entries(SLOT)).toHaveLength(0)
+    expect(keyboard.registry.fixedCatalog.getSnapshot()).toEqual([])
+  })
+
   it('steps all font sizes in one settings mutation and one snapshot', async () => {
     const { theme, keyboard, events, host } = await keyboardTheme()
     keyboard.press()

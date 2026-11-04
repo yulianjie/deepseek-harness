@@ -31,7 +31,7 @@ kind: "package-library"
 
 <a id="known-limitations-and-deferred-work"></a>
 
-- **持久化仅限浏览器本地**——持久化存储使用 `localStorage` 中的 JSON；非浏览器运行时会禁用持久化，本包也不提供跨设备同步。
+- 状态默认以 JSON 写入 `localStorage`。独立 Host 运行时提供各自的存储后端，使相同 Session ID 对应的状态互相隔离。`createMemoryHostStorage()` 在该运行时的生命周期内保留状态。本包不提供跨设备同步。
 - **Web 壳构建输入**——静态 ESM 为 Vite 保留第三方导入；独立消费方自行提供开发依赖（[依赖规则](../AGENTS.md#dependency-declaration)）。
 
 

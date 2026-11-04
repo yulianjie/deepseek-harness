@@ -17,10 +17,11 @@ import { verifyRuntimeArchive } from './verify-runtime-archive.ts'
  * @param node Target Electron executable.
  * @param resourcesRuntime External runtime directory beside the archive.
  * @param descriptor Runtime descriptor already verified against the selected target, which may differ from the build host.
+ * @param remoteSshDir Bundled Remote SSH assets, when testing the fork installer.
  * @returns Resolves after archive integrity, payload checks, Host startup, Office conversion and teardown.
  */
 export async function smokePreparedRuntime(
-  root: string, node: string, resourcesRuntime: string, descriptor: DesktopRuntimeDescriptor,
+  root: string, node: string, resourcesRuntime: string, descriptor: DesktopRuntimeDescriptor, remoteSshDir?: string,
 ): Promise<void> {
   const cache = await mkdtemp(join(tmpdir(), 'desktop-native-smoke-'))
   const environment = { ...scrubWindowsSigningEnvironment(process.env), NODE_OPTIONS: '',
@@ -42,7 +43,8 @@ export async function smokePreparedRuntime(
       throw error
     })
     process.stdout.write(stdout)
-    await smokeDesktopRuntime(root, node, descriptor, environment, resourcesRuntime)
+    await smokeDesktopRuntime(root, node, descriptor, environment, resourcesRuntime,
+      ...remoteSshDir === undefined ? [] : [remoteSshDir])
   } finally {
     await rm(cache, { recursive: true, force: true })
   }

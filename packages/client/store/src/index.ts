@@ -11,9 +11,11 @@ import { createStore, type StoreApi } from 'zustand/vanilla'
 import { subscribeWithSelector } from 'zustand/middleware'
 import { shallow } from 'zustand/shallow'
 import { freeze, produce } from 'immer'
+import { resolveHostStorage, type HostStorage } from './host-storage.ts'
 import type {
   ActionsDecl, BakedActions, ObservableSnapshot, StoreHandle, StoreInstance, StoreSpec,
 } from './contract.ts'
+export { createMemoryHostStorage, resolveHostStorage, type HostStorage } from './host-storage.ts'
 
 // Store contract types are ui-slots authority; re-exported beside the engine
 // so store consumers get one import path.
@@ -97,16 +99,16 @@ function rafBatch(notify: () => void): () => void {
  * frame-level skew, same nature as the object layer's microtask batching.
  *
  * @param init - initial state.
- * @param opts - flush mode and opt-in persistence (localStorage, keyed by name).
+ * @param opts - flush mode and opt-in persistence by name, using browser storage unless an explicit Host backend is supplied.
  * @returns the store.
  */
 export function createSnapshotStore<T>(
-  init: T, opts?: { flush?: 'raf' | 'sync'; persist?: { name: string } }): SnapshotStore<T> {
+  init: T, opts?: { flush?: 'raf' | 'sync'; persist?: { name: string; storage?: HostStorage | undefined } }): SnapshotStore<T> {
   // Immer enters through produce() in update() below (identical semantics to
   // the immer middleware without its setState-signature mutator generics).
   const withSelector = subscribeWithSelector(() => init)
   const api: StoreApi<T> = createStore<T>()(withSelector)
-  if (opts?.persist) attachPersistence(api, opts.persist.name)
+  if (opts?.persist) attachPersistence(api, opts.persist.name, resolveHostStorage(opts.persist.storage))
 
   let subscribe = (fn: () => void) => api.subscribe(() => {
     notifySubscribers([fn], '[client-store]')
@@ -136,20 +138,17 @@ export function createSnapshotStore<T>(
 }
 
 /**
- * Whole-value JSON persistence to localStorage. Hand-rolled instead of the
+ * Whole-value JSON persistence. Hand-rolled instead of the
  * zustand persist middleware: its write path spreads state into an object
  * (`partialize({ ...get() })`), exploding primitive state (a persisted string
  * draft becomes {0:'h',1:'e',...}) — not fixable via merge/deserialize options
  * because the corruption happens before serialization. Storage failures
  * (quota, private mode) only disable persistence, never break the store.
  */
-function attachPersistence<T>(api: StoreApi<T>, name: string): void {
-  // Non-browser runs (node e2e booting the client tree) have no localStorage:
-  // persistence silently disables — same contract as a storage failure, minus
-  // the per-store console noise a ReferenceError would produce.
-  if (typeof localStorage === 'undefined') return
+function attachPersistence<T>(api: StoreApi<T>, name: string, storage: HostStorage | undefined): void {
+  if (storage === undefined) return
   try {
-    const raw = localStorage.getItem(name)
+    const raw = storage.getItem(name)
     if (raw !== null) {
       api.setState(devFreeze(JSON.parse(raw) as T), true)
     }
@@ -158,7 +157,7 @@ function attachPersistence<T>(api: StoreApi<T>, name: string): void {
   }
   api.subscribe((state) => {
     try {
-      localStorage.setItem(name, JSON.stringify(state))
+      storage.setItem(name, JSON.stringify(state))
     } catch (error) {
       console.error(`snapshot store '${name}' persistence failed:`, error)
     }
@@ -187,7 +186,7 @@ export interface EngineStoreHandle<T, A extends ActionsDecl<T>> extends StoreHan
    *
    * Known boundary: the persist key is the storage identity, so multiple live
    * instances created under the same resolved key share (and cross-pollute)
-   * one localStorage entry. Instance uniqueness per key is the caller's
+   * one storage entry when backed by the same storage. Instance uniqueness per key is the caller's
    * responsibility — production is safe because the framework caches one
    * instance per handle x scope key; tests wanting isolation use distinct
    * scope keys or persist-free declarations (multi-create freedom is a
@@ -212,19 +211,21 @@ export interface EngineStoreHandle<T, A extends ActionsDecl<T>> extends StoreHan
  * future TS version breaks this single-literal inference, the design's
  * documented fallback is currying (`defineStore(init).actions({...})`).
  * @param decl - init lambda (fresh state per instance), optional persist key, actions table.
+ * @param hostStorage - Host runtime backend, or absence to use the document's browser storage.
  * @returns the store handle.
  */
 export function defineStore<T, A extends ActionsDecl<T>>(
-  decl: StoreSpec<T, A> & { actions: A & ActionsDecl<T> }): EngineStoreHandle<T, A> {
+  decl: StoreSpec<T, A> & { actions: A & ActionsDecl<T> }, hostStorage?: HostStorage): EngineStoreHandle<T, A> {
   return {
     spec: decl,
     create(scopeKey?: string): EngineStoreInstance<T, A> {
       const persistKey = decl.persist === undefined
         ? undefined
         : scopeKey === undefined ? decl.persist : `${decl.persist}.${scopeKey}`
+      const storage = persistKey === undefined ? undefined : resolveHostStorage(hostStorage)
       const store = createSnapshotStore<T>(
         decl.init(),
-        persistKey !== undefined ? { persist: { name: persistKey } } : undefined)
+        persistKey !== undefined && storage !== undefined ? { persist: { name: persistKey, storage } } : undefined)
       const actions = {} as Record<string, (...params: unknown[]) => void>
       for (const key of Object.keys(decl.actions)) {
         const mutate = decl.actions[key] as (draft: T, ...params: unknown[]) => void
@@ -236,10 +237,10 @@ export function defineStore<T, A extends ActionsDecl<T>>(
         subscribe: fn => store.subscribe(fn),
         store,
         clearPersisted: () => {
-          if (persistKey === undefined || typeof localStorage === 'undefined') return
+          if (persistKey === undefined || storage === undefined) return
           try {
-            localStorage.removeItem(persistKey)
-          } catch {
+            storage.removeItem(persistKey)
+          } catch (_storageUnavailable) {
             // Storage failures (private mode, quota teardown races) only skip
             // cleanup — the same non-fatal contract as attachPersistence.
           }

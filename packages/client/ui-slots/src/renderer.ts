@@ -1,6 +1,6 @@
 /** React-free contracts between the slot host and an installed renderer. */
 import type { Context } from '@deepseek-ai/cordis'
-import type { ReactNode } from 'react'
+import type { ReactNode, RefObject } from 'react'
 import type { ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
 import type {
   SessionAreaProps, SlotEntryDef, SlotScope, SlotSpec, StoredEntry, StoredFactory, Translate,
@@ -33,6 +33,63 @@ export interface LocaleFace extends HostObservable<{ revision: number }> {
 
 /** Observable currency shared by domain sources, stores, and the renderer. */
 export type HostObservable<T> = ObservableSnapshot<T>
+
+export interface WorkspaceSidebarOwner {
+  /** The shell's wide-list or collapsed-rail state. */
+  readonly wide: boolean
+  /** Open the sidebar's wide list. */
+  expandSidebar(): void
+  /** Present only for an additional Host's projection in the shell list. */
+  readonly projection?: {
+    readonly label: string
+    readonly query: string
+    readonly pickerAnchor: RefObject<HTMLButtonElement>
+    clearSearch(): void
+  }
+}
+
+/** One independently owned Host's workspace surface. */
+export interface HostWorkspaceProjection {
+  readonly key: string
+  readonly label: string
+  /** Open this Host's directory picker in the shared sidebar. */
+  addWorkspace(): void
+  /** Render only this Host's workspace surface with the supplied shell geometry and search. */
+  render(owner: WorkspaceSidebarOwner): ReactNode
+}
+
+/** Shell operations that target the Host currently displaying its conversation. */
+export interface HostWorkspaceSidebar {
+  readonly projections: HostObservable<readonly HostWorkspaceProjection[]>
+  /** @returns whether an additional Host handled New Session. */
+  startSession(): boolean
+}
+
+declare module '@deepseek-ai/cordis' {
+  interface Context {
+    /** Shell-owned visibility of its additional Host pane. */
+    hostPaneVisibility?: HostObservable<boolean>
+    /** Whether the outer layout currently shows the conversation area. */
+    shellConversationVisibility?: HostObservable<boolean>
+    /** Return the shell to the conversation area. */
+    showShellConversation?: () => void
+    /** Shell-owned projection roster and foreground Workspace actions. */
+    hostWorkspaceSidebar?: HostWorkspaceSidebar
+    /** Foreground this runtime on explicit workspace navigation. */
+    focusHostWorkspace?: () => void
+    /** Commands registered by this runtime's native Workspace UI. */
+    hostWorkspaceActions?: { startSession(): void; addWorkspace(): void }
+  }
+}
+
+declare module './index.ts' {
+  interface SlotMap {
+    /** Native workspace browsing surface, rendered by the shell sidebar or a Host projection. */
+    'sidebar.workspaces': { kind: 'single'; scope: 'root'; owner: WorkspaceSidebarOwner }
+    /** The shell's center area while another Host owns the foreground pane. */
+    'shell.host-pane': { kind: 'single'; scope: 'root' }
+  }
+}
 
 /**
  * Convert one standard source name to its rendered Hook prop name.
@@ -264,15 +321,21 @@ export interface SlotRendererHost {
   locale?: LocaleFace | undefined
 }
 
+/** An explicit Session selection for a Host pane, including an empty selection. */
+export interface RootSessionSelection {
+  readonly session: SessionAreaProps['session']
+}
+
 /** The installation contract between the `ui-renderer` SlotRegistry and its React renderer. */
 export interface SlotRenderer {
   /**
    * Render the root slot tree over the host API (the only ctx-level entry).
    * @param host - the installing service's host API.
    * @param ownerProps - owner props from the shell's renderSlot('root', ...) call.
+   * @param selection - explicit selection for this pane; omission uses the adapter's current selection.
    * @returns the rendered tree.
    */
-  renderRoot(host: SlotRendererHost, ownerProps: object): ReactNode
+  renderRoot(host: SlotRendererHost, ownerProps: object, selection?: RootSessionSelection): ReactNode
 }
 
 /** Thrown when a retained renderSlot binding is invoked after its declaring entry was disposed. */

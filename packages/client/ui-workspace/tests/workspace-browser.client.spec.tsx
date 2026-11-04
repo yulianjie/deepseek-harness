@@ -152,6 +152,16 @@ function rerender(b: ReturnType<typeof mount>, overrides: Partial<WorkspaceBrows
 }
 
 describe('WorkspaceBrowser', () => {
+  it('keeps an inactive Host picker mounted after consuming the shared Add Workspace request', () => {
+    const browser = mount({
+      projection: { label: 'Remote', query: '', pickerAnchor: { current: null }, clearSearch: vi.fn() },
+      workspaceHostActive: { getSnapshot: () => false, subscribe: () => () => {} },
+    })
+    act(() => { browser.controls.add() })
+    expect(browser.controls.state.getSnapshot().addRequested).toBe(false)
+    expect(screen.getByTestId('directory-flow')).toBeTruthy()
+  })
+
   it.each(['workspace', 'flat', 'ungrouped'] as const)('keeps %s recency independent of arrival order and saved manual positions', (mode) => {
     localStorage.clear()
     const preferences = createWorkspaceViewStore().create()

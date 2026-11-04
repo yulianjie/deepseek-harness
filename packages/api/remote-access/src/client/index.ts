@@ -10,6 +10,7 @@
  */
 
 import type { Context } from '@deepseek-ai/cordis'
+import type {} from '@deepseek-ai/dsh-client-connection/client'
 import remoteAccessRemote from '@deepseek-ai/dsh-api-remote-access/remote'
 import { REMOTE_ACCESS_SNAPSHOT_KEY } from '../snapshot.ts'
 import { mountAccess } from './mount.ts'
@@ -29,5 +30,8 @@ export const inject = ['remote', 'slots']
  * @returns disposer that withdraws the namespace after the stream stops.
  */
 export function apply(ctx: Context): Promise<() => Promise<void>> {
-  return mountAccess(ctx, remoteAccessRemote, parseInjectedBaseline(Reflect.get(globalThis, REMOTE_ACCESS_SNAPSHOT_KEY)))
+  const initial = ctx.get('hostPageAccess') === undefined
+    ? parseInjectedBaseline(Reflect.get(globalThis, REMOTE_ACCESS_SNAPSHOT_KEY))
+    : undefined
+  return mountAccess(ctx, remoteAccessRemote, initial)
 }

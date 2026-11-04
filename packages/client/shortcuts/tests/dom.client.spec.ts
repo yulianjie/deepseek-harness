@@ -32,6 +32,19 @@ const press = (target: EventTarget, extra: KeyboardEventInit = {}) => {
   return event
 }
 
+it('keeps pane input out of the shell command registry', () => {
+  const { input, run } = mount()
+  const pane = document.createElement('section')
+  pane.setAttribute('data-host-pane', 'true')
+  document.body.append(pane)
+  pane.append(input)
+  expect(press(input).defaultPrevented).toBe(false)
+  expect(run).not.toHaveBeenCalled()
+  document.body.append(input)
+  expect(press(input).defaultPrevented).toBe(true)
+  expect(run).toHaveBeenCalledOnce()
+})
+
 it.each(['macos', 'windows'] as const)('leaves configurable %s shortcuts to native input while retaining DOM fixed-action observation', (platform) => {
   const { registry, input, run } = mount('desktop', platform)
   dispose?.()

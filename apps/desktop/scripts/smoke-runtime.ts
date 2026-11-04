@@ -19,16 +19,18 @@ import type { DesktopRuntimeDescriptor } from '../src/runtime-tree.ts'
  * @param runtime - Verified resource descriptor.
  * @param environment - Credential-scrubbed build environment and private native cache.
  * @param resourcesRuntime - Bundled interpreters outside the application archive.
+ * @param remoteSshDir - Bundled Remote SSH assets, when testing the fork installer.
  * @returns Resolves after checks and teardown; rejects on a check or teardown failure.
  */
 export async function smokeDesktopRuntime(
   root: string, node: string, runtime: DesktopRuntimeDescriptor, environment: NodeJS.ProcessEnv, resourcesRuntime: string,
+  remoteSshDir?: string,
 ): Promise<void> {
   const home = mkdtempSync(join(tmpdir(), 'dsh-desktop-smoke-'))
   const profile = join(home, 'profiles', 'desktop')
   const hostEnvironment = {
     ...Object.fromEntries(Object.entries(environment).filter(([name]) => !/^(?:npm|pnpm|corepack)_/iu.test(name))),
-    DSH_HOME: home, HOME: home, USERPROFILE: home,
+    DSH_HOME: home, DSH_AGENTS_HOME: join(home, 'agents'), DSH_TELEMETRY_DISABLED: '1', HOME: home, USERPROFILE: home,
     XDG_CONFIG_HOME: home, XDG_CACHE_HOME: home, XDG_STATE_HOME: home,
     APPDATA: home, LOCALAPPDATA: home,
     npm_config_userconfig: join(home, 'npmrc'), npm_config_globalconfig: join(home, 'npmrc'),
@@ -36,7 +38,8 @@ export async function smokeDesktopRuntime(
   }
   const host = new DesktopHostProcess(node, root, profile, undefined, hostEnvironment,
     undefined, join(resourcesRuntime, 'primary-runtime'),
-    { pnpm: join(resourcesRuntime, 'primary-runtime', 'dependencies', 'pnpm', 'bin', 'pnpm.mjs'), nodeBin: join(resourcesRuntime, 'bin') })
+    { pnpm: join(resourcesRuntime, 'primary-runtime', 'dependencies', 'pnpm', 'bin', 'pnpm.mjs'), nodeBin: join(resourcesRuntime, 'bin') },
+    undefined, remoteSshDir)
   let timer: ReturnType<typeof setTimeout> | undefined
   try {
     writeFileSync(join(home, 'npmrc'), '')
@@ -154,6 +157,22 @@ export function apply(ctx) {
     const response = await fetch(new URL('/', ready.url), { headers: { cookie } })
     if (response.status !== 200 || !(await response.text()).includes('<html')) {
       throw new Error('desktop runtime: packaged frontend smoke failed')
+    }
+    if (remoteSshDir !== undefined) {
+      const hostsUrl = new URL('/api/remote-ssh/hosts', ready.url)
+      const anonymous = await fetch(hostsUrl)
+      if (anonymous.status !== 401 && anonymous.status !== 403) {
+        throw new Error(`desktop runtime: anonymous SSH access returned ${anonymous.status}`)
+      }
+      const hosts = await fetch(hostsUrl, { headers: { cookie } })
+      if (!hosts.ok || JSON.stringify(await hosts.json()) !== '{"hosts":[]}') {
+        throw new Error('desktop runtime: bundled SSH management is unavailable or is not using the isolated profile')
+      }
+      const open = await fetch(new URL('/api/remote-ssh/parallel/open', ready.url), {
+        method: 'POST', headers: { cookie, 'Content-Type': 'application/json' }, body: '{}',
+      })
+      if (open.status !== 400) throw new Error(`desktop runtime: parallel SSH endpoint returned ${open.status}`)
+      console.log('desktop runtime: bundled Remote SSH boot and authenticated management passed')
     }
     const pluginResponse = await fetch(new URL('/desktop-smoke', ready.url), { headers: { cookie } })
     if (await pluginResponse.text() !== 'plugin route ready') throw new Error('desktop runtime: plugin HTTP route failed')

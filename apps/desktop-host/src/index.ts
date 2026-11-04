@@ -1,7 +1,9 @@
 /** Launch the Desktop profile through the Web application and report its URL to Electron. */
 
 import { delimiter, join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { inspect } from 'node:util'
+import type { Plugin } from '@deepseek-ai/cordis'
 import { loadLayeredEnv, loadProfileDirectory, reportSkippedBundles } from '@deepseek-ai/dsh-app-boot'
 import { runProfile } from '@deepseek-ai/dsh/profile-boot'
 import type {} from '@deepseek-ai/dsh-client-connection'
@@ -18,6 +20,7 @@ import { installOfficeEngineResolution } from './office-engine.ts'
 async function main(): Promise<void> {
   const runtimeDir = process.argv[2] as string
   const projectDir = process.argv[3] as string
+  const remoteSshDir = process.argv[7]
   installOfficeEngineResolution(runtimeDir)
   const installAnchor = join(runtimeDir, 'node_modules', '@deepseek-ai', 'dsh', 'package.json')
   const profile = loadProfileDirectory('dsh', projectDir, installAnchor)
@@ -28,7 +31,7 @@ async function main(): Promise<void> {
     resolvedProfile: { profile, installAnchor },
     patchFiles: [],
     args: ['--no-open', '--host', '127.0.0.1', '--port', '0'],
-    ...(process.argv[5] === undefined ? {} : {
+    ...(!process.argv[5] ? {} : {
       packageManager: {
         command: process.execPath,
         args: ['--expose-internals', process.argv[5]],
@@ -97,11 +100,23 @@ async function main(): Promise<void> {
     source: process.argv[4] ?? join(runtimeDir, '..', 'runtime', 'primary-runtime'),
     root: join(resolveDshHome(), 'dsh-runtimes', 'dsh-primary-runtime'),
   })
+  if (remoteSshDir !== undefined) {
+    // This is shipped with Desktop, outside ASAR so OpenSSH deployment can read its assets.
+    const entry = pathToFileURL(join(remoteSshDir, 'index.mjs')).href
+    const plugin: Plugin.Object = await import(entry)
+    if (typeof plugin.apply !== 'function') throw new Error('desktop: invalid bundled Remote SSH plugin')
+    await ctx.plugin(plugin, {})
+  }
   installPlatformSessionPublisher(ctx, (session) => {
     if (process.connected) process.send?.({ type: 'platform-session', session })
   })
   const url = ctx.connection.authenticatedUrl(`${ctx.webServer.protocol}//127.0.0.1:${String(ctx.webServer.port)}`)
-  if (process.connected) process.send?.({ type: 'ready', url, injections: ctx.webServer.collectIndexInjections() }, (error) => { if (error !== null) console.error(error) })
+  const injections = ctx.webServer.collectIndexInjections()
+  if (remoteSshDir !== undefined && !injections.some(row =>
+    row.kind === 'script' && row.text.startsWith('globalThis.__DSH_SSH_PARALLEL__ = '))) {
+    throw new Error('desktop: bundled Remote SSH plugin did not start')
+  }
+  if (process.connected) process.send?.({ type: 'ready', url, injections }, (error) => { if (error !== null) console.error(error) })
 }
 
 /** Upper bound of the startup diagnostic carried over IPC; the head holds the message and stack. */

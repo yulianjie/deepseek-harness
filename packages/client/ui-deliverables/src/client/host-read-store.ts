@@ -5,6 +5,7 @@
  * states a later request reads again.
  */
 import { createSnapshotStore } from '@deepseek-ai/dsh-client-store'
+import type { ClientHostPageAccess } from '@deepseek-ai/dsh-client-connection/client'
 
 /** What one store makes of its reads. */
 export interface HostReadPolicy<T> {
@@ -35,7 +36,14 @@ export class HostReadStore<T> {
   private generation = new AbortController()
   private readonly pending = new Set<Promise<void>>()
 
-  constructor(private readonly policy: HostReadPolicy<T>) {}
+  /**
+   * @param policy - record decoding and retry policy.
+   * @param fetchRoute - Host route carrier, or the browser fetch for the serving Host.
+   */
+  constructor(
+    private readonly policy: HostReadPolicy<T>,
+    private readonly fetchRoute: ClientHostPageAccess['fetch'] = (url, init) => fetch(url, init),
+  ) {}
 
   /**
    * Read one URL unless a state the policy keeps already stands for it.
@@ -71,8 +79,8 @@ export class HostReadStore<T> {
   private async read(url: string, signal: AbortSignal): Promise<void> {
     let next: T
     try {
-      next = await this.policy.decode(await fetch(url, { signal }))
-    } catch {
+      next = await this.policy.decode(await this.fetchRoute(url, { signal }))
+    } catch (_transportFailure) {
       // A transport failure publishes the policy's failed state until the connection is replaced and the store reset.
       next = this.policy.failed
     }

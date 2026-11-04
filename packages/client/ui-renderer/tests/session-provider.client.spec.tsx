@@ -150,6 +150,18 @@ describe('SessionProvider', () => {
     expect(view.container.textContent).toBe('absent')
   })
 
+  it('selects a pane Session independently of the adapter default', () => {
+    const h = makeHost(renderSlot => renderSlot('k.session', {}), { optional: true })
+    const pane = h.addSession('pane')
+    h.registerSession({ component: ({ sessionId }: { sessionId?: string }) => <b>{sessionId ?? 'absent'}</b>, options: {} })
+    const renderer = createSlotRenderer()
+    const view = render(<>{renderer.renderRoot(h.host, {}, { session: pane.reference })}</>)
+    expect(view.container.textContent).toBe('pane')
+    view.rerender(<>{renderer.renderRoot(h.host, {}, { session: undefined })}</>)
+    expect(view.container.textContent).toBe('absent')
+    expect(pane.release).not.toHaveBeenCalled()
+  })
+
   it('preserves a resident optional subtree when absence adopts its first Session', () => {
     const h = makeHost((renderSlot, Provider, reference) => {
       const body = renderSlot('k.session', {})

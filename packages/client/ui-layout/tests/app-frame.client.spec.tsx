@@ -88,6 +88,7 @@ function mountFrame(windowWidth = frameWidth) {
     getSnapshot: () => instance.getSnapshot().panelInfo,
     subscribe: listener => instance.subscribe(listener),
   })
+  let showHostPane = false
   const element = () => (
     <AppFrame
       useStore={useStore}
@@ -101,6 +102,7 @@ function mountFrame(windowWidth = frameWidth) {
       useWorkspaces={sel => sel(workspaceState)}
       {...allowAllAccess}
       t={key => key === 'brand.localBuild' ? 'DSH Local Build' : key}
+      showHostPane={showHostPane}
     />
   )
   const utils = render(element())
@@ -108,6 +110,7 @@ function mountFrame(windowWidth = frameWidth) {
   return {
     ...utils, instance, frame, slotCalls,
     rerenderFrame: () => { utils.rerender(element()) },
+    showHostPane: (show: boolean) => { showHostPane = show; utils.rerender(element()) },
     rightOwner: () => slotCalls.findLast(c => c.key === 'rightbar')!.props as RightbarOwnerProps,
     sidebarOwner: () => slotCalls.findLast(c => c.key === 'sidebar')!.props as SidebarOwnerProps,
   }
@@ -184,6 +187,24 @@ afterEach(() => {
 })
 
 describe('AppFrame', () => {
+  it('keeps the same shell and sidebar while replacing both local conversation columns', () => {
+    const view = mountFrame()
+    const sidebar = view.getByTestId('sidebar-content')
+    expect(view.getByTestId('main-content')).toBeTruthy()
+    expect(view.getByTestId('rightbar-content')).toBeTruthy()
+
+    view.showHostPane(true)
+    expect(view.getByTestId('sidebar-content')).toBe(sidebar)
+    expect(view.getByTestId('shell.host-pane-content')).toBeTruthy()
+    expect(view.queryByTestId('main-content')).toBeNull()
+    expect(view.queryByTestId('rightbar-content')).toBeNull()
+
+    view.showHostPane(false)
+    expect(view.getByTestId('sidebar-content')).toBe(sidebar)
+    expect(view.getByTestId('main-content')).toBeTruthy()
+    expect(view.getByTestId('rightbar-content')).toBeTruthy()
+  })
+
   it('localizes the product title without a configured build title', () => {
     mountFrame()
     expect(document.title).toBe('DSH Local Build')

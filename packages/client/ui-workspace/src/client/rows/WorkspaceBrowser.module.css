@@ -373,6 +373,15 @@
   scrollbar-gutter: stable;
 }
 
+.projection {
+  display: contents;
+}
+
+.embeddedList {
+  min-width: 0;
+  padding-bottom: 4px;
+}
+
 .flatList > * + *,
 .searchTree > [role='treeitem'] + [role='treeitem'],
 .groupSection > * + * {

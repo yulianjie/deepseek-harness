@@ -2,7 +2,7 @@
 import { lazy, Suspense, useMemo } from 'react'
 import type { ReactNode } from 'react'
 import { MarkdownText, type MarkdownLabels, type MarkdownPathImages } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
+import type { HostObservable, PropsHooks, PropsLocale } from '@deepseek-ai/dsh-client-ui-slots'
 import type { DocumentPreviewProps } from '../document/contract.ts'
 import { splitFrontmatter } from './frontmatter.ts'
 import type { FrontmatterFieldsProps } from './frontmatter-fields.tsx'
@@ -22,7 +22,12 @@ const FrontmatterFields = lazy(() => import('./frontmatter-fields.tsx').then(
 ))
 
 /** Standard document inputs and this implementation's locale. */
-export type MarkdownBodyProps = DocumentPreviewProps & PropsLocale<'documentMarkdown'>
+export type MarkdownBodyProps = DocumentPreviewProps & PropsLocale<'documentMarkdown'> & {
+  /** Qualify a file media route for the owning Host. */
+  resourceUrl?: ((input: string) => string) | undefined
+  /** Host connection generation owning the generated media URLs. */
+  mediaGeneration?: unknown
+}
 
 /**
  * Render one accumulated document; EOF completes the primitive's full parse.
@@ -31,11 +36,14 @@ export type MarkdownBodyProps = DocumentPreviewProps & PropsLocale<'documentMark
  * @param props - owner-loaded contents and localized primitive labels.
  * @returns Markdown content, or nothing for a non-text delivery.
  */
-export function MarkdownBody({ content, resourceAddress, useResource, t }: MarkdownBodyProps): ReactNode {
+export function MarkdownBody({ content, resourceAddress, useResource, t, resourceUrl, mediaGeneration }: MarkdownBodyProps): ReactNode {
   const absolutePath = useResource<'file'>(resourceAddress).value?.absolutePath
   const pathImages = useMemo<MarkdownPathImages>(() => ({
-    resolve: value => markdownImageUrl(document.baseURI, absolutePath, value),
-  }), [absolutePath])
+    resolve: (value) => {
+      const url = markdownImageUrl(document.baseURI, absolutePath, value)
+      return url !== undefined && resourceUrl !== undefined ? resourceUrl(url) : url
+    },
+  }), [absolutePath, resourceUrl, mediaGeneration])
   const copyLabel = t('code.copy')
   const copiedLabel = t('code.copied')
   const footnotes = t('footnotes')
@@ -54,6 +62,13 @@ export function MarkdownBody({ content, resourceAddress, useResource, t }: Markd
       <MarkdownText text={split?.body ?? text} streaming={!content.eof} labels={labels} pathImages={pathImages} />
     </div>
   )
+}
+
+/** Bind the owning Host's connection changes to document media URLs. */
+export function HostMarkdownBody({
+  useHostMediaGeneration, ...props
+}: MarkdownBodyProps & PropsHooks<{ hostMediaGeneration: HostObservable<unknown> }>): ReactNode {
+  return <MarkdownBody {...props} mediaGeneration={useHostMediaGeneration(value => value)} />
 }
 
 /**

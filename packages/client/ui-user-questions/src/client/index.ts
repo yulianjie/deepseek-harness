@@ -367,7 +367,7 @@ function publishContinuedQuestions(ctx: ClientContext, cards: QuestionCards): ()
  */
 export function apply(ctx: ClientContext): void {
   ctx.effect(() => ctx.locale.register(NS, { zh, en }), 'ui-user-questions: dictionaries')
-  const questionDraftStore = createQuestionDraftStore()
+  const questionDraftStore = createQuestionDraftStore(ctx.get('hostStorage'))
   const registerPendingInteraction = ctx.uiSession.registerPendingInteraction<PendingQuestion>(
     pending => pending.kind === 'plan-review' ? 2 : 1,
   )

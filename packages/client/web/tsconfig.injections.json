@@ -1,0 +1,11 @@
+{
+  // Shared with the WebWorker packer; keep the browser boot graph out of Host builds.
+  "extends": "../../../tsconfig.base.client.json",
+  "compilerOptions": {
+    "rootDir": "src",
+    "outDir": "lib/types",
+    "tsBuildInfoFile": "lib/tsconfig.injections.tsbuildinfo"
+  },
+  "files": ["src/apply-injections.ts"],
+  "references": [{ "path": "../../host/webserver" }]
+}

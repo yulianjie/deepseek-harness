@@ -7,7 +7,7 @@
  * `sidebar.settings` registrant's (ui-settings), followed by optional footer
  * actions in `sidebar.footer.action`.
  */
-import type { InjectFace, PropsLocale, PropsRenderSlots, PropsRuntime } from '@deepseek-ai/dsh-client-ui-slots'
+import type { InjectFace, PropsLocale, PropsRenderSlots, PropsRuntime, WorkspaceSidebarOwner } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
 import type { WorkspaceId } from '@deepseek-ai/dsh-api-workspace-controller/client'
 import type { ShortcutCatalogEntry } from '@deepseek-ai/dsh-client-shortcuts/client'
@@ -36,13 +36,6 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
     'sidebar.panellist': { kind: 'list'; scope: 'root'; owner: SidebarPanelIconOwnerProps }
     /** Rows of the panel list's More menu; the sidebar shows More only while this list has registrations. */
     'sidebar.panellist.actions': { kind: 'list'; scope: 'root'; owner: SidebarPanelActionsOwnerProps }
-    /**
-     * The workspace/session browsing region: section header, search, the
-     * grouped/flat session list, and every workspace dialog. Declared by this
-     * package's 'sidebar' entry (declaring is claiming); ui-workspace
-     * registers the browser.
-     */
-    'sidebar.workspaces': { kind: 'single'; scope: 'root'; owner: SidebarSectionOwnerProps }
     /**
      * The settings seat at the sidebar foot. Declared by this package's
      * 'sidebar' entry; ui-settings registers its trigger row + modal panel.
@@ -122,12 +115,7 @@ export interface SidebarPanelActionsOwnerProps {
  * Owner share of the browser hole — the only facts crossing the shell/region
  * boundary. Business data and actions arrive through the region's own inject.
  */
-export interface SidebarSectionOwnerProps {
-  /** Shell fold-state output: wide renders the full browser, rail the icon column. */
-  wide: boolean
-  /** Rail icons request expansion; the browser rides the wide flip for focus. */
-  expandSidebar: () => void
-}
+export type SidebarSectionOwnerProps = WorkspaceSidebarOwner
 
 /**
  * Owner share of the sidebar settings seat: the column display state the

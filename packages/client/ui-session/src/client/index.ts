@@ -196,6 +196,8 @@ declare module '@deepseek-ai/cordis' {
   interface Context {
     /** Session Controller adapter and session-scoped source registry. */
     uiSession: UiSession
+    /** Whether this Host's selected Session occupies the shell's visible pane. */
+    hostForeground?: HostObservable<boolean>
   }
 }
 
@@ -292,6 +294,7 @@ export class UiSession extends Service {
   private readonly completionUnread = new Set<SessionId>()
   private statusSnapshot: SessionStatusSnapshot = new Map()
   private readonly statusListeners = new Set<() => void>()
+  private readonly foreground: HostObservable<boolean> | undefined
   private mainRetainId: SessionId | undefined
   private disposeMainRetain = (): void => {}
   private active = true
@@ -315,6 +318,7 @@ export class UiSession extends Service {
     private readonly sessions: ISessions,
   ) {
     super(ctx, 'uiSession')
+    this.foreground = ctx.get('hostForeground')
     this.absent = createBindingSource(this.materializeAbsent())
     this.current = createBindingSource(this.absent.value)
     this.adapter = {
@@ -326,6 +330,7 @@ export class UiSession extends Service {
     ctx.effect(() => {
       const disposeList = sessions.list.subscribe(() => { this.publishMain() })
       const disposeStatus = sessions.list.subscribe(() => { this.reconcileStatus() })
+      const disposeForeground = this.foreground?.subscribe(() => { this.reconcileStatus() })
       const disposeRemoteStatus = ctx.remote.$on('api-session/status', (sessionId, running) => {
         this.observeRunning(sessionId, running)
       })
@@ -335,6 +340,7 @@ export class UiSession extends Service {
         this.active = false
         disposeList()
         disposeStatus()
+        disposeForeground?.()
         disposeRemoteStatus()
         this.disposeMainRetain()
         const records = [...this.bindings.values]
@@ -521,7 +527,8 @@ export class UiSession extends Service {
   }
 
   private isMain(sessionId: SessionId): boolean {
-    return (this.sessions.list.getSnapshot().byId[sessionId]?.retainedBy.mainView ?? 0) > 0
+    return this.foreground?.getSnapshot() !== false
+      && (this.sessions.list.getSnapshot().byId[sessionId]?.retainedBy.mainView ?? 0) > 0
   }
 
   private publishStatus(): void {

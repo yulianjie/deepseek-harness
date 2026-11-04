@@ -19,7 +19,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { SlotCore, StaleAuthorizationError, standardHookPropName } from '@deepseek-ai/dsh-client-ui-slots'
 import type {
   HostObservable, LiveCompositionNode, LocaleFace, OwnerOf, RegisterFactory, SlotEntryDef, SlotMap, SlotRenderer, SlotRendererHost,
-  RootStandardSourceContribution, ScopedStandardSourceBinding, SlotScope, SlotScopeAdapter, SlotSpec,
+  RootSessionSelection, RootStandardSourceContribution, ScopedStandardSourceBinding, SlotScope, SlotScopeAdapter, SlotSpec,
   StandardSourceBinding, StoredFactory,
   StoreDecl, StoreFactory, StoredEntry, StoreInstanceLike,
 } from '@deepseek-ai/dsh-client-ui-slots'
@@ -46,7 +46,11 @@ declare module '@deepseek-ai/dsh-client-ui-slots' {
 }
 
 /** Root owner share: the shell supplies nothing — the frame is inject-assembled. */
-export interface RootOwnerProps { children?: never }
+export interface RootOwnerProps {
+  children?: never
+  /** Render only the workspace projection from a Host pane's own registry. */
+  workspaceSidebar?: import('@deepseek-ai/dsh-client-ui-slots').WorkspaceSidebarOwner
+}
 
 /** Instance key for root-scoped store records (session records key by session id, so the literal cannot collide). */
 const ROOT_INSTANCE_KEY = 'root'
@@ -377,9 +381,14 @@ export class SlotRegistry extends Service {
    * three guards are fail-loud boot-order checks, no fallback.
    * @param key - must be 'root' (runtime-enforced for dynamically composed callers).
    * @param owner - owner share for the root entry (the shell supplies {}).
+   * @param selection - explicit Session owned by this registry's adapter, or explicit absence.
    * @returns the rendered root tree.
    */
-  renderSlot<K extends keyof SlotMap & string>(key: K, owner: OwnerOf<K>): ReturnType<SlotRenderer['renderRoot']> {
+  renderSlot<K extends keyof SlotMap & string>(
+    key: K,
+    owner: OwnerOf<K>,
+    selection?: RootSessionSelection,
+  ): ReturnType<SlotRenderer['renderRoot']> {
     // Widened: in this package's own program SlotMap holds only 'root', which
     // would fold the guard to constant-false; the check exists for plain-JS
     // and cross-program callers where K is wider.
@@ -392,7 +401,7 @@ export class SlotRegistry extends Service {
     if (this._core.entries('root').length === 0) {
       throw new Error("'root' has no registration — a layout entry must register into 'root' before the shell renders it")
     }
-    return this._renderer.renderRoot(this.hostFace(), owner)
+    return this._renderer.renderRoot(this.hostFace(), owner, selection)
   }
 
   /**

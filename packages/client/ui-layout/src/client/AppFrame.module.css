@@ -23,20 +23,20 @@
 }
 
 /* The Windows caption row remains outside every conversation and file panel. */
-:global([data-windows-titlebar]) .frame {
+:global([data-windows-titlebar]) .frame:not([data-host-pane]) {
   --dsh-windows-content-radius: 16px;
   box-sizing: border-box;
   padding-top: var(--dsh-windows-titlebar-height);
   background: var(--dsw-specific-sidebar-fill);
 }
 
-:global([data-windows-titlebar]) .centerCol {
+:global([data-windows-titlebar]) .frame:not([data-host-pane]) > .centerCol {
   background: var(--dsw-alias-bg-base);
   border-radius: var(--dsh-windows-content-radius) 0 0 0;
   corner-shape: round;
 }
 
-:global([data-windows-titlebar]) .frame::before {
+:global([data-windows-titlebar]) .frame:not([data-host-pane])::before {
   content: '';
   position: absolute;
   inset: 0 0 auto;
@@ -67,6 +67,14 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+.frame[data-host-pane] > .centerCol {
+  grid-area: 1 / 2;
+}
+
+.frame[data-host-pane] > .rightbarCol {
+  grid-area: 1 / 3;
 }
 
 /* macOS desktop: the frame goes transparent so window vibrancy reaches the

@@ -1,5 +1,6 @@
 /** Validated current-layout snapshots; undo history belongs to the live window. */
 import { z } from 'zod'
+import { resolveHostStorage, type HostStorage } from '@deepseek-ai/dsh-client-store'
 import { EMPTY_HISTORY, type LayoutState } from '@deepseek-ai/dsh-client-ui-dockkit'
 import type { SurfaceState } from './stores.ts'
 
@@ -58,12 +59,14 @@ function validateReferences(value: z.infer<typeof surface>): void {
 /**
  * Restore one validated Session layout with a fresh in-window undo history.
  * @param sessionId - storage scope.
+ * @param backend - Host backend, or absence for ordinary browser storage.
  * @returns the saved surface, or undefined when absent, inaccessible or invalid.
  */
-export function readSidebarLayout(sessionId: string): SurfaceState | undefined {
-  if (typeof localStorage === 'undefined') return undefined
+export function readSidebarLayout(sessionId: string, backend?: HostStorage): SurfaceState | undefined {
+  const storage = resolveHostStorage(backend)
+  if (storage === undefined) return undefined
   let raw: string | null
-  try { raw = localStorage.getItem(`${sidebarPersistence}.${sessionId}`) }
+  try { raw = storage.getItem(`${sidebarPersistence}.${sessionId}`) }
   catch (_storageUnavailable) { return undefined }
   if (raw === null) return undefined
   try {
@@ -73,7 +76,7 @@ export function readSidebarLayout(sessionId: string): SurfaceState | undefined {
     validateReferences(parsed)
     return { layout: parsed.layout as unknown as LayoutState, minted: parsed.minted, history: EMPTY_HISTORY }
   } catch (_invalidLayout) {
-    clearSidebarLayout(sessionId)
+    clearSidebarLayout(sessionId, storage)
     return undefined
   }
 }
@@ -82,20 +85,24 @@ export function readSidebarLayout(sessionId: string): SurfaceState | undefined {
  * Persist current layout and identity allocation without retaining undo entries.
  * @param sessionId - storage scope.
  * @param surface - current in-memory surface.
+ * @param backend - Host backend, or absence for ordinary browser storage.
  */
-export function writeSidebarLayout(sessionId: string, surface: SurfaceState): void {
-  if (typeof localStorage === 'undefined') return
+export function writeSidebarLayout(sessionId: string, surface: SurfaceState, backend?: HostStorage): void {
+  const storage = resolveHostStorage(backend)
+  if (storage === undefined) return
   const saved = { bySession: { [sessionId]: { layout: surface.layout, minted: surface.minted } } }
-  try { localStorage.setItem(`${sidebarPersistence}.${sessionId}`, JSON.stringify(saved)) }
+  try { storage.setItem(`${sidebarPersistence}.${sessionId}`, JSON.stringify(saved)) }
   catch (error) { console.error('Sidebar layout persistence failed:', error) }
 }
 
 /**
  * Remove only one Session's persisted layout.
  * @param sessionId - storage scope to discard.
+ * @param backend - Host backend, or absence for ordinary browser storage.
  */
-export function clearSidebarLayout(sessionId: string): void {
-  if (typeof localStorage === 'undefined') return
-  try { localStorage.removeItem(`${sidebarPersistence}.${sessionId}`) }
+export function clearSidebarLayout(sessionId: string, backend?: HostStorage): void {
+  const storage = resolveHostStorage(backend)
+  if (storage === undefined) return
+  try { storage.removeItem(`${sidebarPersistence}.${sessionId}`) }
   catch (_storageUnavailable) { /* The invalid layout is still excluded from this window. */ }
 }

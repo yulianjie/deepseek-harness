@@ -17,7 +17,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
 import type {
-  PropsLocale, PropsRenderSlots, PropsRuntime, PropsStore,
+  HostObservable, InjectFace, PropsLocale, PropsRenderSlots, PropsRuntime, PropsStore,
 } from '@deepseek-ai/dsh-client-ui-slots'
 import { CENTER_MIN, clampWidth, computeColumns, RIGHTBAR_DEFAULT_RATIO, RIGHTBAR_MAX_RATIO, RIGHTBAR_MIN, SIDEBAR_AUTO_COLLAPSE, SIDEBAR_COLLAPSED, SIDEBAR_DEFAULT } from './columns.ts'
 import { DocumentTitle } from './DocumentTitle.tsx'
@@ -27,9 +27,26 @@ import css from './AppFrame.module.css'
 /** Full composed props: runtime share + child-slot render share + store share. */
 export type AppFrameProps =
   & PropsRuntime<'root'>
-  & PropsRenderSlots<'sidebar' | 'main' | 'rightbar' | 'shell.bottom' | 'shell.overlay' | 'shell.leading'>
+  & PropsRenderSlots<'sidebar' | 'main' | 'rightbar' | 'shell.bottom' | 'shell.overlay' | 'shell.leading' | 'shell.host-pane'>
   & PropsStore<ReturnType<typeof createLayoutStore>>
   & PropsLocale<'common'>
+  & { pane?: boolean; showHostPane?: boolean }
+
+/**
+ * Render the shell with its selected Host pane when the conversation is visible.
+ * @param props - frame props and shell-owned pane visibility.
+ * @returns the shared window frame.
+ */
+export function HostAwareAppFrame(props: AppFrameProps & InjectFace<{ hooks: { hostPane: HostObservable<boolean> } }>) {
+  const showHostPane = props.useHostPane(value => value)
+  return <AppFrame {...props} showHostPane={showHostPane} />
+}
+
+/** Select the Host's conversation frame or its workspace projection. */
+export function HostPaneRoot(props: AppFrameProps & PropsRenderSlots<'sidebar.workspaces'>) {
+  const owner = props.workspaceSidebar
+  return owner === undefined ? <AppFrame {...props} /> : props.renderSlot('sidebar.workspaces', owner)
+}
 
 /** Center column grid item (session-body building block). */
 function CenterColumn(props: { children?: ReactNode }) {
@@ -125,6 +142,8 @@ export function AppFrame({
   actions,
   renderSlot,
   t,
+  pane = false,
+  showHostPane = false,
 }: AppFrameProps) {
   const layoutInfo = useStore(state => state.layoutInfo)
   const frameRef = useRef<HTMLDivElement | null>(null)
@@ -158,7 +177,7 @@ export function AppFrame({
   }, [actions])
 
   const narrow = viewport < SIDEBAR_AUTO_COLLAPSE
-  const sidebarCollapsed = narrow ? !layoutInfo.narrowExpanded : layoutInfo.sidebar === 0
+  const sidebarCollapsed = pane || (narrow ? !layoutInfo.narrowExpanded : layoutInfo.sidebar === 0)
   const sidebarPreference = sidebarCollapsed
     ? 0
     : layoutInfo.sidebar === 0 ? SIDEBAR_DEFAULT : layoutInfo.sidebar
@@ -166,12 +185,13 @@ export function AppFrame({
   // Desktop reopen controls occupy the frame's shell.leading seat (macOS) or
   // the Windows caption row; neither platform keeps an icon rail.
   const darwin = document.documentElement.dataset.platform === 'darwin'
-  const collapsedWidth = darwin
+  const collapsedWidth = pane || darwin
     || document.documentElement.hasAttribute('data-windows-titlebar') ? 0 : SIDEBAR_COLLAPSED
   // Opening on a narrow frame collapses the left sidebar. Eligibility must
   // include that space before the occupant's first shown report arrives.
   const normal = computeColumns(viewport, !layoutInfo.rightbarShown && narrow ? 0 : sidebarPreference, rightbarPreference, collapsedWidth)
-  const cols = computeColumns(viewport, sidebarPreference, layoutInfo.rightbarTrack ? rightbarPreference : 0, collapsedWidth)
+  const cols = computeColumns(viewport, sidebarPreference,
+    !showHostPane && layoutInfo.rightbarTrack ? rightbarPreference : 0, collapsedWidth)
   const colsRef = useRef(cols)
   colsRef.current = cols
   const rightbarWidth = useRef(normal.rightbar)
@@ -239,53 +259,53 @@ export function AppFrame({
   // whole and was corrected two frames later — visible jitter. cols keeps only
   // the discrete decisions (track present, collapse state) and the drag base.
   const rightbarMax = cols.rightbar === 0 ? 0 : clampWidth(rightbarPreference, RIGHTBAR_MIN, viewport * RIGHTBAR_MAX_RATIO)
-  const sidebar = useMemo(() => renderSlot('sidebar', {
+  const sidebar = useMemo(() => pane ? null : renderSlot('sidebar', {
     collapsed: sidebarCollapsed,
     width: cols.sidebar,
-  }), [renderSlot, sidebarCollapsed, cols.sidebar])
-  const main = useMemo(() => (
-    <MainPanel usePanelInfo={usePanelInfo} renderSlot={renderSlot} />
-  ), [usePanelInfo, renderSlot])
+  }), [pane, renderSlot, sidebarCollapsed, cols.sidebar])
+  const main = useMemo(() => showHostPane
+    ? renderSlot('shell.host-pane', {})
+    : <MainPanel usePanelInfo={usePanelInfo} renderSlot={renderSlot} />,
+  [showHostPane, usePanelInfo, renderSlot])
   const overlays = useMemo(() => renderSlot('shell.overlay', {}), [renderSlot])
   // Window-chrome seat over the main panels' top-left corner: only a fully
   // hidden sidebar column on macOS desktop leaves window chrome without a
   // home — the Windows zero-width collapse keeps its controls in the caption
   // row (ui-sidebar). AppFrame.module.css publishes the matching
   // --dsh-frame-leading-clearance under the same collapsed condition.
-  const leading = useMemo(() => renderSlot('shell.leading', {}), [renderSlot])
-  const leadingMounted = darwin && sidebarCollapsed
+  const leading = useMemo(() => pane ? null : renderSlot('shell.leading', {}), [pane, renderSlot])
+  const leadingMounted = !pane && darwin && sidebarCollapsed
 
   return (
     <div
       ref={frameRef}
       className={css.frame}
       style={{
-        ...(document.documentElement.hasAttribute('data-windows-titlebar')
+        ...(!pane && document.documentElement.hasAttribute('data-windows-titlebar')
           ? { '--dsh-windows-sidebar-width': `${cols.sidebar}px` } : {}),
         gridTemplateColumns:
           `${cols.sidebar}px minmax(${cols.rightbar === 0 ? 0 : CENTER_MIN}px, 1fr) minmax(0px, ${rightbarMax}px)`,
       }}
-      data-sidebar-collapsed={sidebarCollapsed || undefined}
+      data-sidebar-collapsed={!pane && sidebarCollapsed || undefined}
+      data-host-pane={pane || undefined}
       data-rightbar-collapsed={cols.rightbar === 0 || undefined}
       data-rightbar-fullscreen={layoutInfo.rightbarFullscreen || undefined}
       data-rightbar-instant={layoutInfo.rightbarInstant || undefined}
       data-dragging={dragging || undefined}
       data-animating={animating > 0 || undefined}
     >
-      <DocumentTitle
+      {!pane && !showHostPane && <DocumentTitle
         productTitle={productTitle}
         useSessions={useSessions}
         usePanelInfo={usePanelInfo}
-      />
-      <div className={css.sidebarCol}>
+      />}
+      {!pane && <div className={css.sidebarCol}>
         {sidebar}
-      </div>
-      <>
-        <CenterColumn>{main}</CenterColumn>
-        <RightbarColumn>
-          {renderSlot('rightbar', { width: normal.rightbar, viewportWidth: viewport, canShow: normal.rightbar > 0 })}
-        </RightbarColumn>
-      </>
+      </div>}
+      <CenterColumn>{main}</CenterColumn>
+      {!showHostPane && <RightbarColumn>
+        {renderSlot('rightbar', { width: normal.rightbar, viewportWidth: viewport, canShow: normal.rightbar > 0 })}
+      </RightbarColumn>}
       <div className={css.bottomRow} data-shell-bottom>
         {renderSlot('shell.bottom', {})}
       </div>
@@ -299,7 +319,7 @@ export function AppFrame({
       )}
       {/* The collapsed rail is fixed-width: no resize handle while closed. */}
       {!sidebarCollapsed && <DragHandle side="sidebar" left={cols.sidebar} onStart={onSidebarStart} onDrag={onSidebarDrag} onEnd={onDragEnd} />}
-      {layoutInfo.rightbarShown && !layoutInfo.rightbarFullscreen && normal.rightbar > 0 && (
+      {!showHostPane && layoutInfo.rightbarShown && !layoutInfo.rightbarFullscreen && normal.rightbar > 0 && (
         <DragHandle side="rightbar" left={viewport - normal.rightbar} onStart={onRightbarStart} onDrag={onRightbarDrag} onEnd={onDragEnd} />
       )}
     </div>

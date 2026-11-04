@@ -27,6 +27,9 @@ export class PresentedOpenController {
   private readonly lifetime = new AbortController()
   private readonly pending = new Set<Promise<void | PresentedOpenFailure>>()
 
+  /** @param separateHost - true when the owning Host cannot use the shell's desktop actions. */
+  constructor(private readonly separateHost = false) {}
+
   /**
    * Open a declared file once while a request for the same coordinates is pending.
    * Failures remain visible on the card and a later gesture retries them.
@@ -59,6 +62,7 @@ export class PresentedOpenController {
   }
 
   private async openUrl(url: string, action: PresentedAction, application?: string): Promise<PresentedOpenFailure> {
+    if (this.separateHost) return action === 'reveal' ? 'revealError' : 'openError'
     const phase = this.state.getSnapshot()[url]
     if (this.lifetime.signal.aborted || phase === 'opening' || phase === 'revealing') return null
     this.clearExpiry(url)
@@ -78,6 +82,10 @@ export class PresentedOpenController {
    */
   async loadHost(): Promise<void> {
     if (this.lifetime.signal.aborted) return
+    if (this.separateHost) {
+      this.host.set({ name: '', available: false, fileManager: null })
+      return
+    }
     if (this.loading !== undefined) return this.loading
     this.host.set(null)
     const task = this.readHost(AbortSignal.any([this.lifetime.signal, this.metadata.signal]))

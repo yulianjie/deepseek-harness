@@ -39,7 +39,7 @@
       "path": "../../util/crypto"
     },
     {
-      "path": "../../client/web"
+      "path": "../../client/web/tsconfig.injections.json"
     },
     {
       "path": "../../boot/app-boot"

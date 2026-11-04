@@ -28,6 +28,7 @@ import { installWindowsDirectoryInstaller } from './windows-directory-installer.
 import { preserveWindowsRuntimeSignature, signWindowsCode } from './windows-runtime-signature.mjs'
 import { prepareWindowsAsarUnpack, verifyWindowsAsarUnpack } from './windows-asar-unpack.mjs'
 import { recordPackagingEvent } from './packaging-run.mjs'
+import { REMOTE_SSH_DESKTOP } from '../src/remote-ssh-identity.ts'
 import {
   resolveMacOSAppUpdateFeed,
   verifyMacOSAppUpdateConfig,
@@ -50,7 +51,9 @@ export function createElectronBuilderConfig(
   preparedRuntime = undefined,
   preparedRuntimeVersion = undefined,
 ) {
-  const appId = resolveDesktopAppId(env)
+  const remoteSsh = env.DSH_DESKTOP_REMOTE_SSH === '1'
+  const appId = remoteSsh ? REMOTE_SSH_DESKTOP.appId : resolveDesktopAppId(env)
+  const productName = remoteSsh ? REMOTE_SSH_DESKTOP.productName : 'DeepSeek Harness'
   const targetPlatform = env.DSH_DESKTOP_TARGET_PLATFORM
   const resolvedPlatform = targetPlatform ?? hostPlatform
   const resolvedArch = env.DSH_DESKTOP_TARGET_ARCH ?? hostArch
@@ -58,6 +61,7 @@ export function createElectronBuilderConfig(
     throw new Error('desktop package: DSH_DESKTOP_UNSIGNED must be 0 or 1')
   }
   const unsigned = env.DSH_DESKTOP_UNSIGNED === '1'
+  if (remoteSsh && !unsigned) throw new Error('desktop package: the Remote SSH edition requires an unsigned build')
   const skipNotarization = env.DSH_DESKTOP_MACOS_SKIP_NOTARIZATION === '1'
   if (env.DSH_DESKTOP_MACOS_SKIP_NOTARIZATION !== undefined && !['0', '1'].includes(env.DSH_DESKTOP_MACOS_SKIP_NOTARIZATION)) {
     throw new Error('desktop package: DSH_DESKTOP_MACOS_SKIP_NOTARIZATION must be 0 or 1')
@@ -65,7 +69,7 @@ export function createElectronBuilderConfig(
   if (skipNotarization && (unsigned || resolvedPlatform !== 'darwin')) throw new Error('Skipping notarization requires a signed macOS build')
   const packagesMacOS = targetPlatform === 'darwin' || (targetPlatform === undefined && hostPlatform === 'darwin')
   const packagesWindows = resolvedPlatform === 'win32'
-  const policy = packagesMacOS && unsigned ? undefined : resolveDesktopPolicyEnvironment(env)
+  const policy = remoteSsh || (packagesMacOS && unsigned) ? undefined : resolveDesktopPolicyEnvironment(env)
   if (resolvedPlatform === 'win32') installWindowsDirectoryInstaller()
   const macOSSigning = packagesMacOS && !unsigned ? resolveMacOSSigningEnvironment(env) : undefined
   if (packagesMacOS && !unsigned && !skipNotarization) resolveMacOSNotarizationEnvironment(env)
@@ -105,17 +109,21 @@ export function createElectronBuilderConfig(
   const packaged = resolveDesktopBuildCommit(env)
   return {
     appId,
-    protocols: [{ name: 'DeepSeek Harness', schemes: ['dsh'] }],
+    protocols: [{ name: productName, schemes: [remoteSsh ? REMOTE_SSH_DESKTOP.protocol : 'dsh'] }],
     extraMetadata: {
       dshDesktopAppId: appId,
-      dshDesktopUpdateChannel: update?.channel ?? 'nightly',
+      ...(remoteSsh ? {
+        name: REMOTE_SSH_DESKTOP.packageName,
+        productName,
+        dshDesktopRemoteSsh: true,
+      } : { dshDesktopUpdateChannel: update?.channel ?? 'nightly' }),
       ...(policy === undefined ? {} : { dshMandatoryUpdatePolicy: policy }),
       ...buildVersion === productVersion ? {} : { version: buildVersion },
       ...packaged === undefined ? {} : { dshBuildCommit: packaged.commit, dshBuildDirty: packaged.dirty },
     },
-    productName: 'DeepSeek Harness',
+    productName,
     // Unsigned builds carry their own suffix so a shared file can never pass for a release artifact.
-    artifactName: `deepseek-harness-\${version}-\${os}-\${arch}${output.suffix}.\${ext}`,
+    artifactName: `${remoteSsh ? REMOTE_SSH_DESKTOP.artifactPrefix : 'deepseek-harness'}-\${version}-\${os}-\${arch}${output.suffix}.\${ext}`,
     directories: { output: output.directory },
     asar: true,
     electronDist: buildPaths.electron,
@@ -152,6 +160,8 @@ export function createElectronBuilderConfig(
     asarUnpack: unpack,
     extraResources: [
       { from: buildPaths.runtime, to: 'runtime' },
+      ...(remoteSsh ? [{ from: fileURLToPath(new URL('../remote-ssh', import.meta.url)), to: 'remote-ssh',
+        filter: ['**/*', '!tests/**/*', '!README.md'] }] : []),
       { from: fileURLToPath(new URL('../resources/icon-windows.png', import.meta.url)), to: 'icon.png' },
       // Windows tray bitmaps; macOS keeps the Dock and ships no menu bar icon.
       ...(packagesWindows ? [{ from: fileURLToPath(new URL('../resources/tray-windows.ico', import.meta.url)), to: 'tray.ico' }] : []),
@@ -258,7 +268,7 @@ export function createElectronBuilderConfig(
       allowElevation: false,
       allowToChangeInstallationDirectory: false,
       installerLanguages: ['en_US', 'zh_CN'],
-      differentialPackage: true,
+      differentialPackage: !remoteSsh,
     },
     detectUpdateChannel: false,
     publish: update === undefined ? null : [{ provider: 'generic', url: update.publicUrl, channel: update.channel }],

@@ -151,6 +151,11 @@ const BUILTIN_INSPECT_TOKENS: readonly ThemeTokenInspection[] = Object.freeze([
   { name: '--dsw-specific-sidebar-fill', description: 'Sidebar column and title-row background.', valueType: 'CSS color', requiresLightAndDark: true, cssVariable: '--dsw-specific-sidebar-fill' },
 ])
 
+/** An embedded Host keeps a theme snapshot for its controls and inherits the shell's document styles. */
+export interface ThemeOptions {
+  readonly presentation?: 'pane'
+}
+
 /**
  * Theme registry and preference owner. `light`/`dark` are built in (the base
  * stylesheets carry both palettes); third-party themes register alias-layer
@@ -182,8 +187,9 @@ export class ThemeRuntime {
    * @param ctx - owning context (change events are emitted on it; the
    * media-query and scope listeners are released through ctx.effect on dispose).
    * @param host - durable preference scope owned by the same plugin.
+   * @param options - embedded Host panes leave window font shortcuts to the shell.
    */
-  constructor(ctx: ClientContext, host: ConfigForm<ThemeSettings>) {
+  constructor(ctx: ClientContext, host: ConfigForm<ThemeSettings>, options?: ThemeOptions) {
     this.ctx = ctx
     this.host = host
     this.preference = DEFAULT_PREFERENCE
@@ -203,7 +209,7 @@ export class ThemeRuntime {
     }
     ctx.effect(() => host.subscribe(() => { this.adopt() }), 'ui-theme: settings scope adoption')
     this.adopt()
-    installFontSizeShortcuts(ctx, (delta) => { this.adjustFontSizes(delta) })
+    if (options?.presentation !== 'pane') installFontSizeShortcuts(ctx, (delta) => { this.adjustFontSizes(delta) })
   }
 
   /**
@@ -541,13 +547,18 @@ export const inject = ['slots', 'locale', 'remote', 'configForms']
  * slot (a feature owns its settings surface). Desktop font-size shortcuts share
  * all three font-size settings when the keyboard service is available.
  * @param ctx - client cordis context.
+ * @param options - embedded Host panes inherit the shell's global styles and settings UI.
  */
-export function apply(ctx: ClientContext): void {
-  installThemeStyles(ctx)
-  ctx.effect(() => ctx.locale.register(SETTINGS_NS, { zh, en }), 'ui-theme: settings row dictionaries')
+export function apply(ctx: ClientContext, options?: ThemeOptions): void {
+  const pane = options?.presentation === 'pane'
+  if (!pane) {
+    installThemeStyles(ctx)
+    ctx.effect(() => ctx.locale.register(SETTINGS_NS, { zh, en }), 'ui-theme: settings row dictionaries')
+  }
   const host = ctx.configForms.get<ThemeSettings>(THEME_SETTINGS_NAMESPACE)
-  const theme = new ThemeRuntime(ctx, host)
+  const theme = new ThemeRuntime(ctx, host, options)
   ctx.provide('theme', theme)
+  if (pane) return
 
   const store = createAppearanceRowStore()
   let bound: BoundActions<typeof store> | undefined

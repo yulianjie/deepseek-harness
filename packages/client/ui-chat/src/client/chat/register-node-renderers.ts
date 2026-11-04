@@ -3,7 +3,7 @@ import type { ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
 import type { PerformanceUsageMode } from '../../chat-settings.ts'
 import type { ChatPresentationPolicy } from '../presentation-policy.ts'
 import { NS } from '../locale.ts'
-import { AssistantNodeView } from './AssistantNodeView.tsx'
+import { HostAssistantNodeView } from './AssistantNodeView.tsx'
 import { CommandNodeView, ManualCompactionNodeView } from './CommandNodeView.tsx'
 import {
   CompactionNodeView, ContextMessageNodeView, RetryNodeView, TurnErrorNodeView,
@@ -22,11 +22,13 @@ import { TurnTriggerNodeView } from './TurnTriggerNodeView.tsx'
  * @param ctx - owning UI Conversation context.
  * @param performanceUsage - live statistics detail preference.
  * @param presentation - live presentation policy.
+ * @param hostMediaGeneration - connection generation of the Host serving file media.
  */
 export function registerChatNodeRenderers(
   ctx: Context,
   performanceUsage: ObservableSnapshot<PerformanceUsageMode>,
   presentation: ObservableSnapshot<ChatPresentationPolicy>,
+  hostMediaGeneration: ObservableSnapshot<unknown> = { getSnapshot: () => undefined, subscribe: () => () => {} },
 ): void {
   ctx.effect(() => ctx.slots.registerFactory({
     name: 'conversation.chat.reasoning.content',
@@ -55,8 +57,8 @@ export function registerChatNodeRenderers(
       'conversation.chat.reasoning.body': { kind: 'single', scope: 'session' },
       'conversation.chat.message.images': { kind: 'single', scope: 'session' },
     },
-    inject: () => ({ hooks: { presentation } }),
-  }, AssistantNodeView))
+    inject: () => ({ hooks: { presentation, hostMediaGeneration }, resourceUrl: ctx.get('hostPageAccess')?.resourceUrl }),
+  }, HostAssistantNodeView))
   ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({
     name: 'conversation.chat.node',
     key: 'command',

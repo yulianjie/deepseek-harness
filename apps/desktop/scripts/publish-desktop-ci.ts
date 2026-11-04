@@ -61,6 +61,7 @@ if (process.argv[1] !== undefined && resolve(process.argv[1]) === import.meta.fi
     const mode = process.argv[2]
     if (process.argv.length !== 3 || (mode !== '--check' && mode !== '--publish')) throw new Error('Usage: publish-desktop-ci.ts --check|--publish')
     const env = process.env
+    if (env.DSH_DESKTOP_REMOTE_SSH === '1') throw new Error('desktop publish: official update publishing is disabled for the Remote SSH edition.')
     const { route, manifest, config, plan, root, approval } = await prepareDesktopPublication(env)
     if (mode === '--publish' && !env.DESKTOP_APPROVED_PACKAGE) throw new Error('desktop publish: approved package digest is required')
     if (mode === '--check') {

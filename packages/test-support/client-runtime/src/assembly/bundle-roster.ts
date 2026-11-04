@@ -64,7 +64,9 @@ export function bundleRoster(
     if (disabledContext !== undefined
       && disabled.some(value => isJsExpr(value) && Boolean(evaluate(disabledContext, value.__jsExpr)))) continue
     seen.add(name)
-    const manifestPath = locateManifest(anchors, name)
+    // A bundle may also insert its own runtime plugin. A clean workspace
+    // links the bundle from the caller but need not link it from itself.
+    const manifestPath = layers[bundles.indexOf(name)]?.manifestPath ?? locateManifest(anchors, name)
     if (manifestPath === undefined) {
       throw new Error(`client-test-runtime: cannot resolve plugin package ${name} from ${bundles.join(', ')}`)
     }

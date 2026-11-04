@@ -17,6 +17,7 @@ import { registerSidebarShortcuts } from '../src/client/shortcuts.ts'
 import { en } from '../src/client/locales.ts'
 import type { ShortcutCommand, ShortcutCommandId } from '@deepseek-ai/dsh-client-shortcuts/client'
 import { observeSidebarFocus, sidebarTargetFromElement } from '../src/client/focus.ts'
+import { closeWithPaneFocus, openWithPaneFocus } from '../src/client/shell/close-focus.ts'
 
 const SESSION = 'focus-session' as SessionId
 const releases: Array<() => void> = []
@@ -336,6 +337,48 @@ describe('sidebar focus targets', () => {
     input.replaceWith(document.createElement(kind))
     await Promise.resolve()
     expect(document.activeElement).toBe(pane)
+  })
+
+  it('leaves matching pane IDs alone when their former Host loses foreground', async () => {
+    const outgoing = harness().paneElement()
+    const incoming = harness().paneElement()
+    outgoing.parentElement!.setAttribute('data-sidebar-right-open', '')
+    incoming.parentElement!.setAttribute('data-sidebar-right-open', '')
+    const input = document.createElement('input')
+    const content = document.createElement('div')
+    outgoing.append(input)
+    incoming.append(content)
+    let firstHostActive = true
+    releases.push(observeSidebarFocus(document, () => firstHostActive))
+    releases.push(observeSidebarFocus(document, () => !firstHostActive))
+    input.focus()
+
+    firstHostActive = false
+    outgoing.parentElement!.remove()
+    await Promise.resolve()
+    expect(document.activeElement).toBe(document.body)
+
+    content.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true }))
+    expect(document.activeElement).toBe(incoming)
+  })
+
+  it.each(['open', 'close'] as const)('rechecks foreground after a committed %s operation', (operation) => {
+    const h = harness()
+    const paneId = activeDockPaneId(h.layout())
+    const pane = h.paneElement(paneId)
+    pane.parentElement!.setAttribute('data-sidebar-right-open', '')
+    const input = document.createElement('input')
+    pane.append(input)
+    input.focus()
+    let active = true
+    const commit = () => {
+      active = false
+      input.remove()
+      return paneId
+    }
+    if (operation === 'open') openWithPaneFocus(document, SESSION, commit, () => active)
+    else closeWithPaneFocus(document, SESSION, paneId, commit, () => active)
+    expect(document.activeElement).toBe(document.body)
   })
 
   it.each(['outside-pointer', 'other-focus', 'blur', 'hidden', 'session-change', 'dispose'] as const)('does not reclaim focus after %s', async (reason) => {

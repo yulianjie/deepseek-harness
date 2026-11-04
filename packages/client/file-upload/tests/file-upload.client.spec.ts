@@ -250,6 +250,32 @@ describe('file upload service', () => {
     await fiber.dispose()
   })
 
+  it('routes simultaneous Blob uploads through their owning Client Contexts', async () => {
+    const pageFetch = vi.fn(() => Promise.resolve(new Response('local', { status: 202 })))
+    const remoteFetch = vi.fn(() => Promise.resolve(new Response('remote', { status: 202 })))
+    ;(globalThis as UploadGlobal).__DSH_FILE_UPLOAD__ = { fetch: pageFetch }
+    const local = new Context()
+    const remote = new Context()
+    const release = remote.reflect.provide('fileUploadTransport', { fetch: remoteFetch })
+    const localFiber = local.plugin({ apply })
+    const remoteFiber = remote.plugin({ apply })
+    try {
+      await Promise.all([localFiber, remoteFiber])
+      const path = 'api/session/uploadFileBinary?sessionId=same-id'
+      const localBody = new Blob(['one'])
+      const remoteBody = new Blob(['two'])
+      await expect(Promise.all([
+        (local.fileUpload as FileUploadRuntime).post({ path, body: localBody }),
+        (remote.fileUpload as FileUploadRuntime).post({ path, body: remoteBody }),
+      ])).resolves.toEqual([{ status: 202, body: 'local' }, { status: 202, body: 'remote' }])
+      expect(pageFetch).toHaveBeenCalledExactlyOnceWith(path, { method: 'POST', body: localBody })
+      expect(remoteFetch).toHaveBeenCalledExactlyOnceWith(path, { method: 'POST', body: remoteBody })
+    } finally {
+      await Promise.all([localFiber.dispose(), remoteFiber.dispose()])
+      await release()
+    }
+  })
+
   it('fails loud when a served browser has no Worker implementation', async () => {
     vi.stubGlobal('Worker', undefined)
     const ctx = new Context()

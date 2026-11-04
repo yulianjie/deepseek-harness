@@ -553,15 +553,22 @@ function detectBrowserLocale(locales: readonly LocaleDefinition[], languages?: r
 /** Required services: slot registration plus the settings transport. */
 export const inject = ['slots', 'remote', 'configForms']
 
+/** Host pane locale stays within its own client tree. */
+export interface LocaleOptions {
+  readonly presentation?: 'pane'
+}
+
 /**
  * Client plugin body: provide the locale service with base dictionaries and
  * register the feature-owned Language preference row into the General
  * section's item slot (a feature owns its settings surface).
  * @param ctx - client cordis context.
+ * @param options - use a pane locale without synchronizing the shell document or native bridge.
  * @returns resolves after native language initialization and plugin registration.
  */
-export async function apply(ctx: ClientContext): Promise<void> {
-  const bridge = (globalThis as { __DSH_LOCALE__?: LocaleBridge }).__DSH_LOCALE__
+export async function apply(ctx: ClientContext, options?: LocaleOptions): Promise<void> {
+  const pane = options?.presentation === 'pane'
+  const bridge = pane ? undefined : (globalThis as { __DSH_LOCALE__?: LocaleBridge }).__DSH_LOCALE__
   let bootstrap: LocaleBootstrap | undefined
   if (bridge !== undefined) {
     let value: unknown
@@ -586,6 +593,7 @@ export async function apply(ctx: ClientContext): Promise<void> {
   // The service IS the LocaleFace (bind + getSnapshot/subscribe): install it
   // so the render machinery can synthesize the `t` standard seat.
   ctx.slots.installLocale(locale)
+  if (pane) return
 
   const store = createLanguageRowStore()
   let bound: BoundActions<typeof store> | undefined
