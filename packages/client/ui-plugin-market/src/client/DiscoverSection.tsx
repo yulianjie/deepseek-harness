@@ -15,12 +15,17 @@ import css from './DiscoverSection.module.css'
 
 /** Props of the Discover tab. */
 export type DiscoverSectionProps = PropsRuntime<'plugins.tab'> & PropsLocale<'pluginMarket'> & InjectFace<DiscoverFace>
-  & PropsRenderSlots<'plugins.discover.host'>
+  & PropsRenderSlots<'plugins.discover.host'> & ArtworkPolicy
 
 type Translate = DiscoverSectionProps['t']
 
 /** The injected actions, without the reactive sources the renderer binds as hooks. */
-type DiscoverActions = Omit<DiscoverFace, 'hooks'>
+type DiscoverActions = Omit<DiscoverFace, 'hooks'> & ArtworkPolicy
+
+interface ArtworkPolicy {
+  /** Whether this view may load index artwork in the browser. */
+  readonly allowMarketArtwork: boolean
+}
 
 /** Typing pause before the query text is sent. */
 const TEXT_DELAY_MS = 250
@@ -41,9 +46,12 @@ const FACT_KEYS = {
   directory: 'factDirectory',
 } as const satisfies Record<SourceFact['kind'], string>
 
-function MarketIcon({ src, size }: { readonly src: string | undefined; readonly size: number }): ReactNode {
+function MarketIcon({ src, size, allowMarketArtwork }: ArtworkPolicy & {
+  readonly src: string | undefined
+  readonly size: number
+}): ReactNode {
   const [failed, setFailed] = useState<string>()
-  return src === undefined || src === failed
+  return !allowMarketArtwork || src === undefined || src === failed
     ? <PluginArtworkDefault size={size} />
     : (
       <img className={css.image} src={src} width={size} height={size} alt="" loading="lazy" referrerPolicy="no-referrer"
@@ -123,7 +131,9 @@ function EntryCard({ entry, t, face, language, labels, onOpen, onInstall, onOpen
   const date = formatDate(version.publishTimestamp, language, 'medium')
   return (
     <li className={css.card} data-market-entry={entry.name}>
-      <span className={css.icon} aria-hidden="true"><MarketIcon src={entry.icon} size={ICON} /></span>
+      <span className={css.icon} aria-hidden="true">
+        <MarketIcon src={entry.icon} size={ICON} allowMarketArtwork={face.allowMarketArtwork} />
+      </span>
       <div className={css.main}>
         <div className={css.titleRow}>
           <button type="button" className={css.cardOpen} aria-label={t('openEntry', { name: title })} onClick={onOpen}>{title}</button>
@@ -209,7 +219,9 @@ function EntryDetail({ entry, listing, t, face, language, onBack, onInstall, onO
         <span>{t('backToList')}</span>
       </button>
       <div className={css.detailHead}>
-        <span className={css.icon} aria-hidden="true"><MarketIcon src={entry.icon} size={ICON} /></span>
+        <span className={css.icon} aria-hidden="true">
+          <MarketIcon src={entry.icon} size={ICON} allowMarketArtwork={face.allowMarketArtwork} />
+        </span>
         <div className={css.main}>
           <div className={css.titleRow}>
             <h3 className={css.detailTitle}>{title}</h3>
@@ -337,7 +349,9 @@ function ConfirmDialog({ choice, t, face, onCancel, onConfirm }: {
       )}>
       <div className={css.dialogBody}>
         <div className={css.confirmHead}>
-          <span className={css.icon} aria-hidden="true"><MarketIcon src={entry.icon} size={ICON} /></span>
+          <span className={css.icon} aria-hidden="true">
+            <MarketIcon src={entry.icon} size={ICON} allowMarketArtwork={face.allowMarketArtwork} />
+          </span>
           <div className={css.main}>
             <span className={css.strong}>{title}</span>
             <span className={css.meta}>{version.version}</span>

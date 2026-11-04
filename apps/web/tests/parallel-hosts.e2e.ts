@@ -298,8 +298,10 @@ it('searches and manages plugins on the selected Host and keeps a disconnected s
     return mock
   }
   const local = fixture([bundle('local-fixture-plugin')])
+  const remoteIcon = 'http://127.0.0.1:8080/icon.svg'
   const remote = fixture([{
     ...bundle('remote-fixture-plugin'), installTarget: { spec: 'remote-fixture-plugin@2.0.0', version: '2.0.0' },
+    meta: { icon: remoteIcon },
   }, bundle('remote-extra-plugin')])
   const roster = webApp.without(['@deepseek-ai/dsh-client-hmr'])
   const localConnection = {
@@ -332,6 +334,7 @@ it('searches and manages plugins on the selected Host and keeps a disconnected s
   fireEvent.click(await view.findByRole('menuitem', { name: 'SSH Plugin Host' }))
   expect(await view.findByRole('button', { name: 'View remote-fixture-plugin' })).toBeTruthy()
   expect(view.queryByRole('button', { name: 'View local-fixture-plugin' })).toBeNull()
+  expect(view.container.querySelector(`img[src="${remoteIcon}"]`)).toBeNull()
   expect(factory.selectedHost.getSnapshot()).toBeUndefined()
   fireEvent.change(view.getByRole('searchbox', { name: 'Search plugins' }), { target: { value: 'fixture' } })
   expect(view.queryByRole('button', { name: 'View remote-extra-plugin' })).toBeNull()

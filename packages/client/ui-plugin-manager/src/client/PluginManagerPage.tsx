@@ -240,7 +240,7 @@ function itemArtwork(id: string): ReactNode {
   return <Artwork size={CARD_ARTWORK_SIZE} />
 }
 
-/** Manifest images remain isolated from the page DOM; a failed decode keeps the position's default artwork. */
+/** Render only inline package images so Host metadata cannot trigger a Desktop network request. */
 function PackageArtwork({ src, row = false, size = row ? ROW_ARTWORK_SIZE : CARD_ARTWORK_SIZE }: {
   readonly src: string | undefined
   readonly row?: boolean
@@ -248,7 +248,7 @@ function PackageArtwork({ src, row = false, size = row ? ROW_ARTWORK_SIZE : CARD
 }): ReactNode {
   const [failedSource, setFailedSource] = useState<string>()
   const Fallback = row ? PluginArtworkSubagent : PluginArtworkDefault
-  return src === undefined || src === failedSource
+  return src === undefined || src === failedSource || src.length > 350_000 || !/^data:image\/(?:svg\+xml|png|jpeg|webp);base64,/u.test(src)
     ? <Fallback size={size} />
     : <img className={css.packageImage} src={src} width={size} height={size} alt="" onError={() => { setFailedSource(src) }} />
 }

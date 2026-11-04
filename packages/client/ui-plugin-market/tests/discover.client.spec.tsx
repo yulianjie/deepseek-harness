@@ -78,7 +78,7 @@ const READY: DiscoverState = {
   listing: { url: A, query: INITIAL_QUERY, status: 'ready', value: LISTING, answered: INITIAL_QUERY, failure: null }, editing: false, draft: '', saving: false, sourceFailure: null,
 }
 
-function renderTab(state: Partial<DiscoverState> = {}, dictionary: Record<PluginMarketLocaleKey, string> = en) {
+function renderTab(state: Partial<DiscoverState> = {}, dictionary: Record<PluginMarketLocaleKey, string> = en, allowMarketArtwork = true) {
   const store = createSnapshotStore<DiscoverState>({ ...READY, ...state })
   const language = dictionary === en ? 'en' : 'zh'
   const locale = createSnapshotStore<LocaleSnapshot>({ active: language, locales: [], revision: 0 })
@@ -91,7 +91,7 @@ function renderTab(state: Partial<DiscoverState> = {}, dictionary: Record<Plugin
   const openPackage = vi.fn()
   const props = {
     t: translator(dictionary), install, openPackage, ...actions,
-    renderSlot: () => null,
+    renderSlot: () => null, allowMarketArtwork,
     resolveText: (text: string | Record<string, string>) => typeof text === 'string' ? text : text[language] ?? text.en,
     useDiscover: bindSnapshotSelector(store),
     useLocale: bindSnapshotSelector(locale),
@@ -169,6 +169,19 @@ describe('DiscoverSection', () => {
     expect(image.getAttribute('loading')).toBe('lazy')
     fireEvent.error(image)
     expect(document.querySelector('[data-market-entry="dsh-a"] img')).toBeNull()
+  })
+
+  it.each([true, false])('loads index artwork only when the Host projection allows it (%s)', (allow) => {
+    const external = 'https://cdn.example/a.png'
+    const loopback = 'http://127.0.0.1:4173/market-icon.png'
+    const entries = [...LISTING.entries, entry('local-market-icon', { icon: loopback })]
+    renderTab({ listing: { ...READY.listing!, value: { ...LISTING, entries } } }, en, allow)
+    const images = (root: ParentNode) => [...root.querySelectorAll('img')].map(node => node.getAttribute('src'))
+    expect(images(document)).toEqual(allow ? [external, loopback] : [])
+    fireEvent.click(card('dsh-a').getByRole('button', { name: 'View Alpha' }))
+    expect(images(document)).toEqual(allow ? [external] : [])
+    fireEvent.click(screen.getByRole('button', { name: 'Install Alpha' }))
+    expect(images(screen.getByRole('dialog', { name: 'Install "Alpha"?' }))).toEqual(allow ? [external] : [])
   })
 
   it('sends typed text after a pause, ordered by relevance, and offers that order only with text', () => {

@@ -46,7 +46,10 @@ export function apply(ctx: ClientContext): void {
     ]
     return () => { for (const dispose of disposers) dispose() }
   }, 'ui-plugin-market: host invalidations')
-  const face = controller.face(text => ctx.locale.resolveText(text))
+  const face = {
+    ...controller.face(text => ctx.locale.resolveText(text)),
+    allowMarketArtwork: ctx.get('pluginHostView')?.projected !== true,
+  }
   const t = ctx.locale.bind(NS)
   ctx.slots.inject('plugins.tab', () => ctx.slots.register({
     name: 'plugins.tab', id: 'discover', label: () => t('title'), locale: NS, inject: () => face,
