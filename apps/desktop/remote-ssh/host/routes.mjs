@@ -132,6 +132,9 @@ export function registerSshRoutes(ctx, manager, broker) {
     return { ok: true }
   })
   installParallelCarrier(ctx, broker)
+  register('/parallel/restore-probe', 'POST', async ({ id }, signal) => ({
+    expected: await manager.probeRestore(hostId(id), signal),
+  }))
   register('/parallel/open', 'POST', ({ id, expected, password }, signal) => {
     if (expected !== undefined && (!isHostIdentity(expected) || Object.keys(expected).length !== 2)) {
       throw new RequestError(400, 'Harness 实例身份无效。')

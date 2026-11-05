@@ -86,17 +86,21 @@ export class ConnectionManager {
   #directory;
   #ssh;
   #deploy;
+  #probe;
+  #restoreLifetime = new AbortController();
+  #restoreProbes = new Set();
   #entries = new Map();
   #queue = Promise.resolve();
   #disposal;
 
-  constructor({ stateDir, ssh = new OpenSsh(), deploy }) {
+  constructor({ stateDir, ssh = new OpenSsh(), deploy, probe }) {
     if (typeof stateDir !== 'string' || !stateDir || typeof deploy !== 'function') {
       throw new TypeError('ConnectionManager requires stateDir and deploy.');
     }
     this.#directory = join(resolve(stateDir), 'hosts');
     this.#ssh = ssh;
     this.#deploy = deploy;
+    this.#probe = probe;
   }
 
   #schedule(action) {
@@ -191,8 +195,28 @@ export class ConnectionManager {
     };
   }
 
+  /** Find projects in a legacy SSH instance without provisioning a Host. */
+  async probeRestore(id, signal) {
+    const host = await this.#schedule(() => this.#readHost(id));
+    connectionPassword(host.authMode, undefined);
+    const lifetime = this.#restoreLifetime.signal;
+    const probeSignal = signal ? AbortSignal.any([signal, lifetime]) : lifetime;
+    probeSignal.throwIfAborted();
+    const probe = Promise.resolve().then(() => this.#probe(host, probeSignal));
+    this.#restoreProbes.add(probe);
+    try {
+      return await probe;
+    } catch (error) {
+      if (probeSignal.aborted) throw probeSignal.reason;
+      if (error instanceof ConnectionError) throw error;
+      throw new ConnectionError('SSH_RESTORE_PROBE_FAILED', '无法读取远端已有项目，请手动连接。');
+    } finally {
+      this.#restoreProbes.delete(probe);
+    }
+  }
+
   /** Open a server-side SSH forward. A password is used only during a new connection's setup. */
-  async connectNative(id, { password } = {}) {
+  async connectNative(id, { password, expected } = {}) {
     const entry = await this.#schedule(async () => {
       const host = await this.#readHost(id);
       const current = this.#entries.get(id);
@@ -206,7 +230,7 @@ export class ConnectionManager {
       if (this.#disposal) throw cancelled();
       const entry = { host, controller: new AbortController(), readiness: newReadiness(), state: 'connecting', stage: 'resolve' };
       this.#entries.set(id, entry);
-      entry.task = this.#supervise(entry, authentication);
+      entry.task = this.#supervise(entry, authentication, expected);
       return entry;
     }).finally(() => {
       password = undefined;
@@ -235,13 +259,17 @@ export class ConnectionManager {
 
   dispose() {
     if (!this.#disposal) {
+      this.#restoreLifetime.abort(cancelled());
       for (const entry of this.#entries.values()) entry.controller.abort(cancelled());
-      this.#disposal = this.#queue.then(() => Promise.all([...this.#entries.keys()].map((id) => this.#disconnect(id))));
+      this.#disposal = Promise.all([
+        this.#queue.then(() => Promise.all([...this.#entries.keys()].map((id) => this.#disconnect(id)))),
+        Promise.allSettled(this.#restoreProbes),
+      ]);
     }
     return this.#disposal;
   }
 
-  async #supervise(entry, authentication) {
+  async #supervise(entry, authentication, expected) {
     const { host, controller: { signal } } = entry;
     let tunnel;
     try {
@@ -253,7 +281,7 @@ export class ConnectionManager {
       entry.stage = 'deploy';
       entry.deployment = validateDeployment(await this.#deploy(host, ({ stage } = {}) => {
         if (!signal.aborted && /^[a-z][a-z0-9_-]{0,39}$/.test(stage ?? '')) entry.stage = stage;
-      }, signal, authentication));
+      }, signal, authentication, expected));
       signal.throwIfAborted();
       entry.stage = 'tunnel';
       tunnel = await this.#ssh.openTunnel(host.alias, entry.deployment.remotePort, {

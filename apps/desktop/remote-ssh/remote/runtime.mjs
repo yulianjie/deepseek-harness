@@ -8,7 +8,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const script = fileURLToPath(import.meta.url);
 const bundle = dirname(script);
-const [action, root, instance, version, argument] = process.argv.slice(2);
+const [action, root, instance, version, argument, expectedArgument] = process.argv.slice(2);
 const nodeRuntime = action === 'deploy' && {
   nodePath: argument, nodeVersion: process.versions.node,
   pathDigest: createHash('sha256').update(process.env.PATH ?? '').digest('hex'),
@@ -111,9 +111,18 @@ async function hostIdentity() {
   throw new Error('The persistent remote Host identity is invalid');
 }
 
-async function identity() {
+async function identity(expected) {
   const path = join(instance, 'identity.json');
   const existing = await readJson(path);
+  if (expected !== undefined) {
+    const hostId = await readFile(join(root, 'host-id'), 'utf8').catch(error => {
+      if (error.code !== 'ENOENT') throw error;
+    });
+    if (existing?.hostId !== expected.hostId || existing?.instanceId !== expected.instanceId || hostId?.trim() !== expected.hostId) {
+      throw Object.assign(new Error('SSH 配置指向了不同的 Harness 实例。'), { code: 'PARALLEL_IDENTITY_MISMATCH' });
+    }
+    return expected;
+  }
   const hostId = await hostIdentity();
   if (existing?.hostId === hostId && /^[\da-f-]{36}$/.test(existing.instanceId)) return existing;
   if (existing) throw new Error('The persistent remote instance identity is invalid');
@@ -298,7 +307,7 @@ async function launchSupervisor(bin, expected) {
 
 async function deploy() {
   progress('probe', `Using SSH login Node.js v${nodeRuntime.nodeVersion} (${nodeRuntime.nodePath})`);
-  const expected = await identity();
+  const expected = await identity(expectedArgument === undefined ? undefined : JSON.parse(expectedArgument));
   const current = await running();
   if (current.locked || current.child) {
     const value = await waitForHost(expected, 25_000);

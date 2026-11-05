@@ -87,7 +87,7 @@ export class ParallelHostBroker {
     }
     setup.addEventListener('abort', cancel, { once: true })
     try {
-      const connection = this.#manager.connectNative(id, { password })
+      const connection = this.#manager.connectNative(id, { password, expected })
       password = undefined
       const target = await connection
       setup.removeEventListener('abort', cancel)

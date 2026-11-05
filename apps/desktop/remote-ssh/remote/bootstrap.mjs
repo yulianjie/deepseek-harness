@@ -1,6 +1,6 @@
 // The local builder prepends the input bundle before sending this script over SSH.
 import { spawn } from 'node:child_process';
-import { lstat, mkdir, mkdtemp, realpath, rename, rm, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
@@ -32,9 +32,30 @@ async function stageBundle(parent) {
   return privateDirectory(target);
 }
 
+async function smallFile(path) {
+  try {
+    const info = await lstat(path);
+    return info.isFile() && info.size <= 4096 ? await readFile(path, 'utf8') : undefined;
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+}
+
 try {
   const home = await realpath(homedir());
-  const root = await privateDirectory(join(home, '.dsh-remote-ssh'));
+  const rootPath = join(home, '.dsh-remote-ssh');
+  if (input.expected !== undefined) {
+    const [record, hostId] = await Promise.all([
+      smallFile(join(rootPath, 'instances', input.instance, 'identity.json')),
+      smallFile(join(rootPath, 'host-id')),
+    ]);
+    const actual = JSON.parse(record ?? 'null');
+    if (actual?.hostId !== input.expected.hostId || actual?.instanceId !== input.expected.instanceId ||
+        hostId?.trim() !== input.expected.hostId) {
+      throw Object.assign(new Error('SSH 配置指向了不同的 Harness 实例。'), { code: 'PARALLEL_IDENTITY_MISMATCH' });
+    }
+  }
+  const root = await privateDirectory(rootPath);
   const bundles = await privateDirectory(join(root, 'bundles'));
   const instances = await privateDirectory(join(root, 'instances'));
   const instance = await privateDirectory(join(instances, input.instance));
@@ -43,7 +64,8 @@ try {
   // the detached supervisor and leaves the lock available to later SSH sessions.
   const worker = spawn('flock', ['--exclusive', '--wait', '180', '--conflict-exit-code', '75', '--close',
     join(instance, 'deploy.lock'), process.execPath, join(bundle, 'runtime.mjs'),
-    input.action, root, instance, input.version, process.argv[2]], { stdio: ['ignore', 'inherit', 'inherit'] });
+    input.action, root, instance, input.version, process.argv[2],
+    ...(input.expected === undefined ? [] : [JSON.stringify(input.expected)])], { stdio: ['ignore', 'inherit', 'inherit'] });
   const code = await new Promise((resolve, reject) => {
     worker.once('error', reject);
     worker.once('exit', resolve);
@@ -53,5 +75,5 @@ try {
 } catch (error) {
   const message = error.code === 'ENOENT' && error.syscall === 'spawn flock'
     ? 'Remote SSH runtime requires util-linux flock on the SSH login terminal PATH.' : error.message;
-  console.log(`DSH_REMOTE_SSH_RESULT ${JSON.stringify({ error: message })}`);
+  console.log(`DSH_REMOTE_SSH_RESULT ${JSON.stringify({ error: message, code: error.code })}`);
 }

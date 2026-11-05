@@ -69,6 +69,8 @@ In **Plugins**, choose **Local** or a connected SSH host from the **Host** menu 
 
 If SSH disconnects, reconnect from **远程连接**. The remote session does not fall back to your local machine and unfinished requests are not automatically replayed. Closing the Desktop connection leaves the remote Harness running.
 
+At startup, Desktop reconnects in the background to verified SSH hosts with saved workspaces and reloads their project lists. On upgrade, Desktop checks older SSH configurations for workspaces in the bundled Harness version before starting a connection. Password hosts require you to enter the password in **远程连接**. If automatic restore fails, that panel shows the error and lets you connect manually.
+
 <a id="terminal-command"></a>
 
 ## Terminal command

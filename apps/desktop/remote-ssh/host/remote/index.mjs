@@ -11,6 +11,7 @@ const INSTANCE_NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const PUBLIC_DIAGNOSTICS = new Set([
   'REMOTE_LINUX_REQUIRED', 'REMOTE_LOGIN_PROBE_FAILED', 'REMOTE_NODE_REQUIRED', 'REMOTE_NODE_CHANGED',
+  'PARALLEL_IDENTITY_MISMATCH', 'SSH_RESTORE_PROBE_FAILED',
 ]);
 
 const sources = {
@@ -23,10 +24,13 @@ const sources = {
   'workspace.css': '../../ui/workspace.css',
 };
 
-export async function buildRemoteScript(action, instance = 'default') {
+export async function buildRemoteScript(action, instance = 'default', expected) {
   if (!['deploy', 'stop'].includes(action)) throw new TypeError('Unknown remote runtime action');
   if (typeof instance !== 'string' || !INSTANCE_NAME.test(instance)) {
     throw new TypeError('Remote instance must be 1–64 letters, digits, dots, dashes or underscores and start with a letter or digit');
+  }
+  if (expected !== undefined && (!UUID.test(expected?.hostId) || !UUID.test(expected?.instanceId))) {
+    throw new TypeError('Invalid expected remote Harness identity');
   }
   const [nodeBootstrap, bootstrap, ...assets] = await Promise.all([
     readFile(new URL('./node-bootstrap.sh', import.meta.url), 'utf8'),
@@ -35,7 +39,7 @@ export async function buildRemoteScript(action, instance = 'default') {
   ]);
   const files = Object.fromEntries(Object.keys(sources).map((name, index) => [name, assets[index]]));
   const bundle = createHash('sha256').update(JSON.stringify(files)).digest('hex');
-  const input = JSON.stringify({ action, instance, version: DSH_VERSION, bundle, files });
+  const input = JSON.stringify({ action, instance, version: DSH_VERSION, bundle, files, expected });
   return `#!/bin/sh
 set -eu
 umask 077
@@ -45,6 +49,34 @@ ${nodeBootstrap.replaceAll('\r\n', '\n')}
 const input = ${input};
 ${bootstrap.replaceAll('\r\n', '\n')}
 DSH_REMOTE_SSH_BOOTSTRAP
+`;
+}
+
+/** Build the one-time read-only probe for workspaces created by the pinned release. */
+export async function buildRestoreProbeScript(instance) {
+  if (typeof instance !== 'string' || !INSTANCE_NAME.test(instance)) throw new TypeError('Invalid SSH instance name');
+  const [nodeBootstrap, probe] = await Promise.all([
+    readFile(new URL('./node-bootstrap.sh', import.meta.url), 'utf8'),
+    readFile(new URL('./restore-probe.mjs', import.meta.url), 'utf8'),
+  ]);
+  return `#!/bin/sh
+set -eu
+if [ ! -d "$HOME/.dsh-remote-ssh/instances/${instance}" ]; then
+  printf '%s\\n' 'DSH_REMOTE_SSH_RESULT {"expected":null}'
+  exit 0
+fi
+runtime_action=restore
+${nodeBootstrap.replaceAll('\r\n', '\n')}
+"$remote_node" --input-type=module - <<'DSH_REMOTE_SSH_PROBE'
+import { homedir } from 'node:os';
+${probe.replaceAll('\r\n', '\n')}
+try {
+  const expected = await readRestoreIdentity(homedir(), ${JSON.stringify(instance)});
+  console.log('DSH_REMOTE_SSH_RESULT ' + JSON.stringify({ expected }));
+} catch (error) {
+  console.log('DSH_REMOTE_SSH_RESULT {"code":"SSH_RESTORE_PROBE_FAILED","error":"无法读取远端已有项目，请手动连接。"}');
+}
+DSH_REMOTE_SSH_PROBE
 `;
 }
 
@@ -67,8 +99,8 @@ function parseResult(stdout) {
 }
 
 export function createRemoteDeployment({ execSsh }) {
-  async function run(action, host, onProgress, signal, authentication) {
-    const input = await buildRemoteScript(action, host.instance);
+  async function run(action, host, onProgress, signal, authentication, expected) {
+    const input = await buildRemoteScript(action, host.instance, expected);
     signal?.throwIfAborted();
     let remainder = '';
     const report = (line) => {
@@ -94,8 +126,19 @@ export function createRemoteDeployment({ execSsh }) {
   }
 
   return {
-    async deploy(host, onProgress, signal, authentication) {
-      const value = await run('deploy', host, onProgress, signal, authentication);
+    async probe(host, signal) {
+      const input = await buildRestoreProbeScript(host.instance);
+      signal?.throwIfAborted();
+      const { stdout } = await execSsh(host, { input, signal, timeoutMs: 45_000 });
+      const { expected } = parseResult(stdout);
+      if (expected === null) return null;
+      if (!UUID.test(expected?.hostId) || !UUID.test(expected?.instanceId)) {
+        throw new ConnectionError('SSH_RESTORE_PROBE_FAILED', '远端恢复记录无效，请手动连接。');
+      }
+      return { hostId: expected.hostId, instanceId: expected.instanceId };
+    },
+    async deploy(host, onProgress, signal, authentication, expected) {
+      const value = await run('deploy', host, onProgress, signal, authentication, expected);
       if (!UUID.test(value?.hostId) || !UUID.test(value?.instanceId) || !UUID.test(value?.bootId)
         || value.version !== DSH_VERSION
         || !Number.isInteger(value.remotePort) || value.remotePort < 1 || value.remotePort > 65535

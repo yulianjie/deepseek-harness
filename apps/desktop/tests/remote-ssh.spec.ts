@@ -1,6 +1,7 @@
+import { spawnSync } from 'node:child_process'
 import { once } from 'node:events'
 import { randomUUID } from 'node:crypto'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { createServer, request } from 'node:http'
 import { createConnection, type AddressInfo } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -40,13 +41,94 @@ it('limits SSH host management to the authenticated browser Peer', async () => {
   for (const [path, method] of [
     ['/api/remote-ssh/hosts', 'GET'], ['/api/remote-ssh/discover', 'GET'],
     ['/api/remote-ssh/hosts/save', 'POST'], ['/api/remote-ssh/hosts/remove', 'POST'],
-    ['/api/remote-ssh/parallel/open', 'POST'], ['/api/remote-ssh/parallel/close', 'POST'],
+    ['/api/remote-ssh/parallel/restore-probe', 'POST'], ['/api/remote-ssh/parallel/open', 'POST'],
+    ['/api/remote-ssh/parallel/close', 'POST'],
     ['http://dsh.internal/api/remote-ssh/hosts', 'GET'], ['/api/elsewhere/%2e%2e/remote-ssh/hosts', 'GET'],
   ] as const) {
     expect(await status(path, method, 'fixture=api')).toBe(403)
   }
   expect(await status('/api/remote-ssh/hosts', 'GET', 'fixture=browser')).toBe(200)
   expect(await status('/api/session.export', 'GET', 'fixture=api')).toBe(200)
+})
+
+it('finds existing rc.5 remote projects without creating or modifying remote instance files', async () => {
+  const entry = new URL('../remote-ssh/host/remote/restore-probe.mjs', import.meta.url).href
+  const { readRestoreIdentity } = await import(/* @vite-ignore */ entry)
+  const home = await mkdtemp(join(tmpdir(), 'dsh-ssh-restore-'))
+  onTestFinished(() => rm(home, { recursive: true, force: true }))
+  const expected = { hostId: randomUUID(), instanceId: randomUUID() }
+  const projectId = randomUUID()
+  expect(await readRestoreIdentity(home, 'default')).toBeNull()
+  expect(await readdir(home)).toEqual([])
+  const instance = join(home, '.dsh-remote-ssh', 'instances', 'default')
+  const storages = join(instance, 'dsh-home', 'storages')
+  await mkdir(storages, { recursive: true })
+  await writeFile(join(instance, 'identity.json'), JSON.stringify(expected))
+  await writeFile(join(home, '.dsh-remote-ssh', 'host-id'), expected.hostId)
+  expect(await readRestoreIdentity(home, 'default')).toBeNull()
+  const registry = join(storages, 'workspace.json')
+  const unit = { name: 'workspace', version: 2 }
+  await writeFile(registry, JSON.stringify({ unit, global: { workspaceIds: [] }, tables: { workspaces: {} } }))
+  expect(await readRestoreIdentity(home, 'default')).toBeNull()
+  const registryWithProject = JSON.stringify({
+    unit, global: { workspaceIds: [projectId] }, tables: { workspaces: { [projectId]: { path: '/private/project' } } },
+  })
+  await writeFile(registry, registryWithProject)
+  expect(await readRestoreIdentity(home, 'default')).toEqual(expected)
+  expect(await readFile(registry, 'utf8')).toBe(registryWithProject)
+  const hostIdentity = join(home, '.dsh-remote-ssh', 'host-id')
+  await writeFile(hostIdentity, randomUUID())
+  await expect(readRestoreIdentity(home, 'default')).rejects.toThrow('identity does not match')
+  await writeFile(hostIdentity, expected.hostId)
+  await writeFile(registry, JSON.stringify({ unit, global: { workspaceIds: [projectId] }, tables: { workspaces: {} } }))
+  await expect(readRestoreIdentity(home, 'default')).rejects.toThrow('storage is incomplete')
+})
+
+it('rejects a stale restore identity before provisioning anything on an SSH target', async () => {
+  const entry = new URL('../remote-ssh/host/remote/index.mjs', import.meta.url).href
+  const { buildRemoteScript } = await import(/* @vite-ignore */ entry)
+  const home = await mkdtemp(join(tmpdir(), 'dsh-ssh-expected-'))
+  onTestFinished(() => rm(home, { recursive: true, force: true }))
+  const expected = { hostId: randomUUID(), instanceId: randomUUID() }
+  const script: string = await buildRemoteScript('deploy', 'default', expected)
+  const input = script.split("<<'DSH_REMOTE_SSH_BOOTSTRAP'\n")[1]?.split('\nDSH_REMOTE_SSH_BOOTSTRAP')[0]
+  expect(input).toBeDefined()
+  const result = spawnSync(process.execPath, ['--input-type=module', '-'], {
+    input, env: { ...process.env, HOME: home, USERPROFILE: home }, encoding: 'utf8', timeout: 10_000,
+  })
+  expect(result.status).toBe(0)
+  expect(result.stdout).toContain('"code":"PARALLEL_IDENTITY_MISMATCH"')
+  expect(await readdir(home)).toEqual([])
+})
+
+it('keeps password hosts out of legacy discovery and drains active probes on shutdown', async () => {
+  const entry = new URL('../remote-ssh/host/connection/index.mjs', import.meta.url).href
+  const { ConnectionManager } = await import(/* @vite-ignore */ entry)
+  const root = await mkdtemp(join(tmpdir(), 'dsh-ssh-probe-lifecycle-'))
+  const started = Promise.withResolvers<undefined>()
+  const ended = Promise.withResolvers<undefined>()
+  const probe = vi.fn((_host: object, signal: AbortSignal) => {
+    started.resolve(undefined)
+    return new Promise((_, reject) => {
+      signal.addEventListener('abort', () => {
+        ended.resolve(undefined)
+        reject(signal.reason)
+      }, { once: true })
+    })
+  })
+  const deploy = vi.fn()
+  const manager = new ConnectionManager({ stateDir: root, probe, deploy })
+  onTestFinished(async () => { await manager.dispose(); await rm(root, { recursive: true, force: true }) })
+  const locked = await manager.save({ alias: 'locked', authMode: 'password' })
+  await expect(manager.probeRestore(locked.id)).rejects.toMatchObject({ code: 'SSH_PASSWORD_REQUIRED' })
+  expect(probe).not.toHaveBeenCalled()
+  const legacy = await manager.save({ alias: 'legacy' })
+  const opening = expect(manager.probeRestore(legacy.id)).rejects.toMatchObject({ code: 'SSH_CANCELLED' })
+  await started.promise
+  await manager.dispose()
+  await ended.promise
+  await opening
+  expect(deploy).not.toHaveBeenCalled()
 })
 
 it('keeps legacy SSH profiles and stores only authentication metadata', async () => {

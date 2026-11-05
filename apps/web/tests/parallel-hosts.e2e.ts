@@ -376,7 +376,7 @@ it('searches and manages plugins on the selected Host and keeps a disconnected s
   expect(await view.findByRole('button', { name: 'View local-fixture-plugin' })).toBeTruthy()
 }, 60_000)
 
-it('mounts the bundled SSH manager only in the local Desktop shell', async () => {
+async function loadBundledSshProvider() {
   const entry = pathToFileURL(resolve('apps/desktop/remote-ssh/index.mjs')).href
   const { apply } = await import(/* @vite-ignore */ entry)
   const injections: { kind: string; text: string }[] = []
@@ -392,31 +392,49 @@ it('mounts the bundled SSH manager only in the local Desktop shell', async () =>
   // Capture the actual bundled index injection, with no SSH process or remote JavaScript.
   apply(host)
   expect(injections).toHaveLength(1)
-  const provider = {} as Pick<Parameters<typeof installDesktopSsh>[2], '__DSH_SSH_PARALLEL__'>
-  Function('globalThis', injections[0]!.text)(provider)
+  type ProviderWindow = Pick<Parameters<typeof installDesktopSsh>[2], '__DSH_SSH_PARALLEL__'>
+  const target: ProviderWindow & Pick<typeof globalThis, 'localStorage'> = { localStorage }
+  Function('globalThis', injections[0]!.text)(target)
+  const provider = target.__DSH_SSH_PARALLEL__
+  if (provider === undefined) throw new Error('Desktop SSH provider is unavailable')
+  return provider
+}
 
+function sshFixture(clientId: string) {
   const { mock } = createAssembledRemote()
   mock.stream('$events', (_args, stream) => {
-    stream.push({ type: 'ready', clientId: 'fixture-local-ssh', host: { home: '/home/fixture' } })
+    stream.push({ type: 'ready', clientId, host: { home: '/home/fixture' } })
   })
+  return mock
+}
+
+async function bootSshShell() {
+  const mock = sshFixture('fixture-local-ssh')
   vi.stubGlobal('__DSH_REMOTE_ACCESS__', { type: 'baseline', owner: true })
   const roster = webApp.without(['@deepseek-ai/dsh-client-hmr'])
-  const modules = createInProcessModules(graphFromRoster(roster.rows), await loadPluginModules({
-    roster, provide: {
-      [connectionPackage]: {
-        apply: (scope: Context): void => {
-          installConnection(scope, { interactions: 'answer', transport: { rpc: mock.rpc } })
-        },
-      },
+  const localConnection = {
+    installConnection,
+    apply(scope: Context): void {
+      installConnection(scope, { interactions: 'answer', transport: { rpc: mock.rpc } })
     },
+  }
+  const modules = createInProcessModules(graphFromRoster(roster.rows), await loadPluginModules({
+    roster, provide: { [connectionPackage]: localConnection },
   }))
   const ctx = new Context()
   onTestFinished(() => ctx.fiber.dispose())
   ctx.provide('hostStorage', createMemoryHostStorage())
   provideHostRuntimeFactory(ctx, modules)
   await bootClient({ ctx, modules, manifest: modules.manifest })
-  const staticModules = getStaticModules()
+  return ctx
+}
+
+it('mounts the bundled SSH manager only in the local Desktop shell', async () => {
+  const provider = await loadBundledSshProvider()
+  const ctx = await bootSshShell()
   const hostRecord = { id: 'fixture', label: 'Fixture SSH host', alias: 'fixture', instance: 'default' }
+  const restoreKey = `dsh.remote-ssh.restore.${hostRecord.id}`
+  onTestFinished(() => { localStorage.removeItem(restoreKey) })
   let saved: typeof hostRecord & { authMode?: string; identityFile?: string } = hostRecord
   const saves: unknown[] = []
   const opens: unknown[] = []
@@ -425,6 +443,10 @@ it('mounts the bundled SSH manager only in the local Desktop shell', async () =>
     switch (pathname) {
       case '/api/remote-ssh/hosts':
         return Response.json({ hosts: [saved] })
+      case '/api/remote-ssh/parallel/restore-probe':
+        expect(init?.method).toBe('POST')
+        expect(JSON.parse(String(init?.body))).toEqual({ id: hostRecord.id })
+        return Response.json({ expected: null })
       case '/api/remote-ssh/hosts/save':
         expect(init?.method).toBe('POST')
         saved = JSON.parse(String(init?.body))
@@ -439,11 +461,13 @@ it('mounts the bundled SSH manager only in the local Desktop shell', async () =>
     }
   })
   const win = {
-    ...provider, dshDesktop: { protocolVersion: 1 }, document: { baseURI: 'dsh-app://app/' },
+    __DSH_SSH_PARALLEL__: provider, dshDesktop: { protocolVersion: 1 }, document: { baseURI: 'dsh-app://app/' },
     __DSH_TRANSPORT__: { fetch, streamBaseUrl: 'http://127.0.0.1:8400/' },
   }
+  const staticModules = getStaticModules()
   await installDesktopSsh(ctx, staticModules, { ...win, location: { protocol: 'https:', hostname: 'app' } })
   expect(ctx.slots.entries('main').every(row => row.options.key !== 'remote-host-ssh')).toBe(true)
+  expect(fetch).not.toHaveBeenCalled()
   await installDesktopSsh(ctx, staticModules, { ...win, location: { protocol: 'dsh-app:', hostname: 'app' } })
   const container = document.body.appendChild(document.createElement('div'))
   onTestFinished(() => { container.remove() })
@@ -455,13 +479,19 @@ it('mounts the bundled SSH manager only in the local Desktop shell', async () =>
   const panelButtons = within(nav).getAllByRole('button')
   const plugins = within(nav).getByRole('button', { name: /^(Plugins|插件)$/ })
   expect(panelButtons[panelButtons.indexOf(plugins) + 1]).toBe(launcher)
-  expect(fetch).not.toHaveBeenCalled()
+  await waitFor(() => {
+    expect(fetch.mock.calls.map(([url]) => new URL(String(url)).pathname)).toEqual([
+      '/api/remote-ssh/hosts', '/api/remote-ssh/parallel/restore-probe',
+    ])
+    expect(localStorage.getItem(restoreKey)).toBe('null')
+  })
+  expect(opens).toHaveLength(0)
   fireEvent.click(launcher)
   const manager = await shell.findByRole('region', { name: '远程连接' })
   const panel = within(manager)
   expect(await panel.findByText('Fixture SSH host')).toBeTruthy()
   expect(launcher.getAttribute('aria-current')).toBe('page')
-  expect(fetch).toHaveBeenCalledTimes(1)
+  expect(fetch).toHaveBeenCalledTimes(3)
 
   fireEvent.click(panel.getByRole('button', { name: '编辑' }))
   expect(panel.getByRole('radio', { name: 'OpenSSH 配置' })).toHaveProperty('checked', true)
@@ -487,6 +517,100 @@ it('mounts the bundled SSH manager only in the local Desktop shell', async () =>
   expect(input).toHaveProperty('value', '')
   expect((await panel.findByRole('alert')).textContent).toBe('SSH 登录失败。')
   expect(opens).toEqual([{ id: hostRecord.id, password }])
+}, 60_000)
+
+it('restores remembered and discovered SSH projects in the sidebar without changing the foreground Host', async () => {
+  const provider = await loadBundledSshProvider()
+  const ctx = await bootSshShell()
+  const hostId = '11111111-1111-1111-1111-111111111111'
+  const rememberedIdentity = { hostId, instanceId: '22222222-2222-2222-2222-222222222222' }
+  const discoveredIdentity = { hostId, instanceId: '33333333-3333-3333-3333-333333333333' }
+  const passwordIdentity = { hostId, instanceId: '44444444-4444-4444-4444-444444444444' }
+  const hosts = [
+    { id: 'remembered', label: 'Remembered SSH Host', authMode: 'config' },
+    { id: 'discovered', label: 'Discovered SSH Host', authMode: 'key' },
+    { id: 'legacy-empty', label: 'Legacy empty SSH Host', authMode: 'config' },
+    { id: 'saved-empty', label: 'Saved empty SSH Host', authMode: 'config' },
+    { id: 'password', label: 'Password SSH Host', authMode: 'password' },
+  ].map(host => ({ ...host, alias: host.id, instance: 'default' }))
+  const restoreKey = (id: string) => `dsh.remote-ssh.restore.${id}`
+  localStorage.setItem(restoreKey('remembered'), JSON.stringify(rememberedIdentity))
+  localStorage.setItem(restoreKey('saved-empty'), 'null')
+  localStorage.setItem(restoreKey('password'), JSON.stringify(passwordIdentity))
+  onTestFinished(() => { for (const { id } of hosts) localStorage.removeItem(restoreKey(id)) })
+
+  const probes: string[] = []
+  const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const { pathname } = new URL(String(input))
+    if (pathname === '/api/remote-ssh/hosts') return Response.json({ hosts })
+    if (pathname !== '/api/remote-ssh/parallel/restore-probe') throw new Error(`Unexpected SSH request ${pathname}`)
+    expect(init?.method).toBe('POST')
+    const { id } = JSON.parse(String(init?.body)) as { id: string }
+    probes.push(id)
+    return Response.json({ expected: id === 'discovered' ? discoveredIdentity : null })
+  })
+  const discovered = sshFixture('fixture-discovered-ssh')
+  const remembered = sshFixture('fixture-remembered-ssh')
+  const openParallelHost = vi.fn(async (request: { id: string; expected?: typeof rememberedIdentity; password?: string }) => {
+    const { id } = request
+    if (id !== 'remembered' && id !== 'discovered') throw new Error(`Unexpected SSH channel ${id}`)
+    const identity = id === 'remembered' ? rememberedIdentity : discoveredIdentity
+    const mock = id === 'remembered' ? remembered : discovered
+    return {
+      ...identity, hostKey: `ssh:${identity.hostId}:${identity.instanceId}`, label: id, version: '0.2.1',
+      leaseAvailable: createSnapshotStore(true),
+      transport: { rpc: mock.rpc, fetch: () => Promise.resolve(new Response(null, { status: 404 })) },
+      resourceUrl: (input: string) => input,
+      async close() {},
+    }
+  })
+  const fixtureProvider = { ...provider, openParallelHost }
+  await installDesktopSsh(ctx, getStaticModules(), {
+    __DSH_SSH_PARALLEL__: fixtureProvider,
+    dshDesktop: { protocolVersion: 1 }, document: { baseURI: 'dsh-app://app/' },
+    location: { protocol: 'dsh-app:', hostname: 'app' }, __DSH_TRANSPORT__: { fetch },
+  })
+  const view = render(pane(ctx.slots.renderSlot('root', {})))
+  const project = (label: string, id = 'fx-ws-fixture') => view.container.querySelector(
+    `[data-workspace-host="${label}"] [data-row-key="workspace:${id}"]`,
+  )
+  await waitFor(() => {
+    expect(project('Remembered SSH Host')).toBeTruthy()
+    expect(project('Discovered SSH Host')).toBeTruthy()
+  })
+  expect(probes.sort()).toEqual(['discovered', 'legacy-empty'])
+  expect(openParallelHost.mock.calls.map(([{ id, expected, password }]) => ({ id, expected, password }))).toEqual([
+    { id: 'remembered', expected: rememberedIdentity, password: undefined },
+    { id: 'discovered', expected: discoveredIdentity, password: undefined },
+  ])
+  expect(localStorage.getItem(restoreKey('discovered'))).toBe(JSON.stringify(discoveredIdentity))
+  expect(localStorage.getItem(restoreKey('legacy-empty'))).toBe('null')
+  expect(ctx.hostRuntimeFactory.selectedHost.getSnapshot()).toBeUndefined()
+
+  fireEvent.click(view.getByRole('button', { name: '远程连接' }))
+  const manager = within(await view.findByRole('region', { name: '远程连接' }))
+  expect(manager.getByLabelText('SSH 登录密码')).toHaveProperty('value', '')
+  expect(manager.getByText('输入 SSH 登录密码以恢复此主机上的工作区。')).toBeTruthy()
+  await waitFor(() => {
+    expect(manager.queryAllByRole('alert').map(alert => alert.textContent)).toEqual([])
+    expect(manager.getAllByText('已连接')).toHaveLength(2)
+  })
+  expect(openParallelHost).toHaveBeenCalledTimes(2)
+  fireEvent.click(manager.getByRole('button', { name: '返回会话' }))
+
+  await act(async () => {
+    expect(discovered.streams.push('workspace/follow', { type: 'remove', workspaceId: 'fx-ws-fixture' })).toBe(1)
+  })
+  expect(project('Discovered SSH Host')).toBeNull()
+  expect(localStorage.getItem(restoreKey('discovered'))).toBe(JSON.stringify(discoveredIdentity))
+  await act(async () => {
+    expect(discovered.streams.push('workspace/follow', { type: 'remove', workspaceId: 'fx-ws-home' })).toBe(1)
+  })
+  await waitFor(() => {
+    expect(project('Discovered SSH Host', 'fx-ws-home')).toBeNull()
+    expect(localStorage.getItem(restoreKey('discovered'))).toBe('null')
+  })
+  expect(project('Remembered SSH Host')).toBeTruthy()
 }, 60_000)
 
 it('routes unified rows, background interactions and New Session commands to the owning Host', async () => {

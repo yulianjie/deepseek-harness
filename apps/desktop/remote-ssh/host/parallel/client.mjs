@@ -48,6 +48,11 @@ export function createParallelClient({
       if (!Array.isArray(result?.aliases)) throw new Error('SSH 别名列表无效。')
       return result.aliases
     }
+    if (action === 'restore-probe') {
+      const result = await post(fetch, baseUrl, managementPrefix + action, data, signal)
+      if (result.expected !== null && !isHostIdentity(result.expected)) throw new Error('SSH 工作区恢复记录无效。')
+      return result
+    }
     if (!['save', 'remove'].includes(action)) throw new Error('不支持此 SSH 配置操作。')
     return post(fetch, baseUrl, '/api/remote-ssh/hosts/' + action, data, signal)
   }
@@ -177,7 +182,7 @@ export function createParallelClient({
     })
   }
 
-  return { openParallelHost, listParallelHosts, configureParallelHost }
+  return { openParallelHost, listParallelHosts, configureParallelHost, isHostIdentity }
 }
 
 export const { openParallelHost, listParallelHosts, configureParallelHost } = createParallelClient(createParallelContract())

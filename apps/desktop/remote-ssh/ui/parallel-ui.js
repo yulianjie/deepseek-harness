@@ -1,7 +1,7 @@
 /** Host management. Keep this function self-contained for the trusted local boot script. */
 
 export function apply(ctx, {
-  react, primitives, openParallelHost, listParallelHosts, configureParallelHost,
+  react, primitives, openParallelHost, listParallelHosts, configureParallelHost, isHostIdentity,
   createProjectPane, installRemoteHostSettings, transport, baseUrl,
 }) {
   const panelId = 'remote-host-ssh'
@@ -27,8 +27,10 @@ export function apply(ctx, {
   const idle = { getSnapshot: () => undefined, subscribe: () => () => {} }
   const emptyHost = { alias: '', label: '', instance: 'default', authMode: 'config', identityFile: '' }
   const authLabels = { config: 'OpenSSH 配置', key: '私钥文件', password: '密码' }
+  const restoreKey = 'dsh.remote-ssh.restore.'
   const display = {
     connected: ['已连接', 'done'],
+    checking: ['正在检查已保存的工作区', 'ongoing'],
     connecting: ['正在连接', 'ongoing'],
     reconnecting: ['正在重连', 'ongoing'],
     disconnecting: ['正在断开', 'ongoing'],
@@ -36,8 +38,9 @@ export function apply(ctx, {
     disconnected: ['未连接', 'idle'],
   }
   const local = { transport, baseUrl, signal: lifetime.signal }
-  let state = { hosts: [], loading: false, error: '' }
+  let state = { hosts: [], loading: false, error: '', restoreWarning: '' }
   let refreshing
+  let startupPending = true
 
   function update(patch) {
     state = { ...state, ...patch }
@@ -57,12 +60,72 @@ export function apply(ctx, {
     return useSyncExternalStore(access.subscribe, access.getSnapshot)
   }
 
+  function warnAboutRestoreStorage() {
+    if (!state.restoreWarning) update({ restoreWarning: '无法读写 SSH 工作区的启动恢复记录。可在此手动连接。' })
+  }
+
+  // An absent record permits legacy discovery. Null skips startup restore for this configuration.
+  function restoreTarget(id) {
+    try {
+      const record = globalThis.localStorage.getItem(restoreKey + id)
+      if (record === null) return undefined
+      const expected = JSON.parse(record)
+      if (expected !== null && !isHostIdentity(expected)) throw new Error('Invalid SSH restore identity')
+      return expected
+    } catch (error) {
+      warnAboutRestoreStorage()
+      return null
+    }
+  }
+
+  function rememberRestoreTarget(id, expected) {
+    try {
+      if (expected === undefined) globalThis.localStorage.removeItem(restoreKey + id)
+      else globalThis.localStorage.setItem(restoreKey + id, JSON.stringify(expected))
+    } catch (error) {
+      warnAboutRestoreStorage()
+    }
+  }
+
+  function trackRestoreTarget(id, source, identity) {
+    let hasProjects
+    const observe = () => {
+      if (lifetime.signal.aborted) return
+      const { phase, state, items } = source.getSnapshot()
+      if (phase !== 'ready' || state !== 'idle') return
+      const next = items.length > 0
+      if (next === hasProjects) return
+      hasProjects = next
+      rememberRestoreTarget(id, next ? identity : null)
+    }
+    const stop = source.subscribe(observe)
+    observe()
+    return stop
+  }
+
+  function restoreHosts(hosts) {
+    for (const host of hosts) {
+      const expected = restoreTarget(host.id)
+      if (expected === null) continue
+      if (host.authMode !== 'password') {
+        connect(host, undefined, { expected, probe: expected === undefined })
+      } else if (expected !== undefined) {
+        notices.set(host.id, { message: '输入 SSH 登录密码以恢复此主机上的工作区。' })
+      }
+    }
+  }
+
   function refresh() {
     if (lifetime.signal.aborted) return
     if (refreshing) return refreshing
     update({ loading: true, error: '' })
     refreshing = listParallelHosts(local).then(hosts => {
-      if (!lifetime.signal.aborted) update({ hosts })
+      if (lifetime.signal.aborted) return
+      if (startupPending) {
+        startupPending = false
+        restoreHosts(hosts)
+      }
+      update({ hosts })
     }).catch(error => {
       if (!lifetime.signal.aborted) update({ error: error.message })
     }).finally(() => {
@@ -90,6 +153,7 @@ export function apply(ctx, {
   }
 
   async function close(entry) {
+    entry.stopRestoreTracking?.()
     try {
       await entry.channel.close()
     } finally {
@@ -97,13 +161,22 @@ export function apply(ctx, {
     }
   }
 
-  function connect(host, password) {
+  function connect(host, password, { expected, probe = false } = {}) {
     if (entries.has(host.id)) return
-    run(host.id, 'connecting', async () => {
-      const status = host.status
-      const expected = status?.hostId && status?.instanceId
-        ? { hostId: status.hostId, instanceId: status.instanceId }
-        : undefined
+    run(host.id, probe ? 'checking' : 'connecting', async () => {
+      if (probe) {
+        const result = await configureParallelHost({ ...local, action: 'restore-probe', data: { id: host.id } })
+        lifetime.signal.throwIfAborted()
+        expected = result.expected
+        rememberRestoreTarget(host.id, expected)
+        if (expected === null) return
+        operations.get(host.id).phase = 'connecting'
+        update()
+      }
+      const { status } = host
+      if (expected === undefined && isHostIdentity(status)) {
+        expected = { hostId: status.hostId, instanceId: status.instanceId }
+      }
       const channel = await openParallelHost({ ...local, id: host.id, expected, password })
       const entry = { channel }
       try {
@@ -132,6 +205,9 @@ export function apply(ctx, {
             throw new Error('远端 Host 的原生面板未能完成加载。')
           }
         }
+        entry.stopRestoreTracking = trackRestoreTarget(host.id, scope.get('workspaces').list, {
+          hostId: channel.hostId, instanceId: channel.instanceId,
+        })
         entries.set(host.id, entry)
       } catch (error) {
         await close(entry)
@@ -213,7 +289,7 @@ export function apply(ctx, {
   }
 
   function HostPanel() {
-    const { hosts, loading, error } = useSyncExternalStore(subscribe, readState)
+    const { hosts, loading, error, restoreWarning } = useSyncExternalStore(subscribe, readState)
     const [draft, setDraft] = useState(null)
     const [aliases, setAliases] = useState(null)
     const [removeId, setRemoveId] = useState()
@@ -225,6 +301,12 @@ export function apply(ctx, {
       try {
         const result = await configureParallelHost({ ...local, action, data })
         if (lifetime.signal.aborted) return
+        if (action === 'remove') rememberRestoreTarget(data.id)
+        if (action === 'save') {
+          const { id, alias, instance } = result.host
+          const previous = hosts.find(host => host.id === id)
+          if (!previous || previous.alias !== alias || previous.instance !== instance) rememberRestoreTarget(id, null)
+        }
         done(result)
         if (action !== 'discover') {
           await refreshing
@@ -278,6 +360,7 @@ export function apply(ctx, {
           h(Button, { variant: 'primary', type: 'submit', disabled: busy }, '保存主机'),
           h(Button, { disabled: busy, onClick: () => setDraft(null) }, '取消'))),
         (failure || error) && h('p', { role: 'alert' }, failure || error),
+        restoreWarning && h('p', { role: 'alert' }, restoreWarning),
         loading && h('p', { role: 'status' }, '正在读取 SSH 主机…'),
         hosts.length ? h('ul', { 'aria-label': 'SSH 主机', style: { padding: 0, margin: 0, listStyle: 'none', display: 'grid', gap: 8 } },
           ...hosts.map(host => h(HostRow, { key: host.id, host, busy, editing: draft?.id === host.id,
@@ -314,7 +397,8 @@ export function apply(ctx, {
       if (activePanelId === panelId) void refresh()
     }
     const unsubscribe = panelInfo.subscribe(panelChanged)
+    void refresh()
     panelChanged()
     return unsubscribe
-  }, 'remote-ssh: refresh hosts when opening manager')
+  }, 'remote-ssh: restore hosts at startup and refresh when opening manager')
 }

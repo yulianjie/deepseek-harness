@@ -24,6 +24,6 @@ export function apply(ctx, config = {}) {
       authentication: options.authentication,
     }),
   })
-  const manager = new ConnectionManager({ stateDir, ssh, deploy: runtime.deploy })
+  const manager = new ConnectionManager({ stateDir, ssh, deploy: runtime.deploy, probe: runtime.probe })
   registerSshRoutes(ctx, manager, new ParallelHostBroker(manager))
 }
