@@ -52,6 +52,7 @@ export PATH=$login_path
 # Stop only verifies and signals an existing process. It can run on an older
 # Node.js than the CLI and supervisor it controls.
 minimum_node=22.12.0
+if [ "$runtime_action" = deploy ]; then minimum_node=24.9.0; fi
 if [ "$runtime_action" = stop ]; then minimum_node=18.0.0; fi
 if ! node_error=$(
   "$remote_node" --input-type=commonjs -e '

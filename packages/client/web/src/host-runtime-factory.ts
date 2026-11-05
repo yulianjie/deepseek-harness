@@ -13,11 +13,14 @@ import { assertEntriesActive } from './boot-client.ts'
 import { createHostRuntime, type HostKey, type HostRuntime, type HostRuntimeOptions } from './host-runtime.ts'
 
 const CONNECTION = '@deepseek-ai/dsh-client-connection'
+const CONTEXT_MENU = '@deepseek-ai/dsh-client-ui-context-menu'
+const FILE_ACTIONS = '@deepseek-ai/dsh-client-ui-file-actions'
+const FILE_DRAG = '@deepseek-ai/dsh-client-ui-file-drag'
 const LAYOUT = '@deepseek-ai/dsh-client-ui-layout'
 const LOCALE = '@deepseek-ai/dsh-client-locale'
 const SHORTCUTS = '@deepseek-ai/dsh-client-shortcuts'
 const THEME = '@deepseek-ai/dsh-client-ui-theme'
-const PANE_PLUGINS: readonly string[] = [LAYOUT, LOCALE, SHORTCUTS, THEME]
+const PANE_PLUGINS: readonly string[] = [CONTEXT_MENU, FILE_ACTIONS, FILE_DRAG, LAYOUT, LOCALE, SHORTCUTS, THEME]
 
 const REQUIRED_PLUGINS = [
   '@deepseek-ai/dsh-typert-registry',
@@ -26,7 +29,10 @@ const REQUIRED_PLUGINS = [
   '@deepseek-ai/dsh-api-remote-access',
   '@deepseek-ai/dsh-api-session-controller',
   '@deepseek-ai/dsh-api-workspace-controller',
+  '@deepseek-ai/dsh-api-workspace-files',
   '@deepseek-ai/dsh-client-file-upload',
+  CONTEXT_MENU,
+  FILE_DRAG,
   LOCALE,
   '@deepseek-ai/dsh-client-resources',
   SHORTCUTS,
@@ -43,6 +49,7 @@ const REQUIRED_PLUGINS = [
 ] as const
 
 const OPTIONAL_PLUGINS = [
+  FILE_ACTIONS,
   '@deepseek-ai/dsh-api-terminal-controller',
   '@deepseek-ai/dsh-client-ui-input-trigger',
   '@deepseek-ai/dsh-client-ui-commands',

@@ -41,6 +41,7 @@ beforeEach(() => {
   Object.defineProperty(document, 'fonts', { configurable: true, value: new EventTarget() })
   Object.defineProperty(Range.prototype, 'getBoundingClientRect', { configurable: true, value: () => new DOMRect() })
   onTestFinished(() => {
+    vi.unstubAllGlobals()
     if (fonts === undefined) Reflect.deleteProperty(document, 'fonts')
     else Object.defineProperty(document, 'fonts', fonts)
     if (rangeRect === undefined) Reflect.deleteProperty(Range.prototype, 'getBoundingClientRect')
@@ -48,10 +49,7 @@ beforeEach(() => {
   })
 })
 
-afterEach(() => {
-  cleanup()
-  vi.unstubAllGlobals()
-})
+afterEach(() => { cleanup() })
 
 async function openFixtureHost(name: string) {
   const { mock } = createAssembledRemote({ positionalRequests: true })
@@ -274,20 +272,38 @@ it('searches and manages plugins on the selected Host and keeps a disconnected s
   vi.stubGlobal('__DSH_REMOTE_ACCESS__', { type: 'baseline', owner: true })
   const bundle = (name: string): BundleInfo => ({
     name, version: '1.0.0', official: false, availability: 'profile', installed: true,
-    optional: false, enabled: true, removable: true, rows: [], overrides: [],
+    optional: false, enabled: true, removable: true, updatable: false, rows: [], overrides: [],
   })
   const fixture = (bundles: BundleInfo[]) => {
     const { mock } = createAssembledRemote()
     mock.unary('pluginInventory/list', ok({ entries: [], managementAvailable: true }))
     mock.unary('pluginManager/listBundles', () => ok(bundles.slice()))
     mock.unary('pluginManager/listPlugins', ok([]))
+    mock.unary('pluginManager/readBundleDetail', ok({ status: 'none' }))
+    mock.unary('pluginManager/listVersions', ({ name }: { name: string }) => {
+      const installed = bundles.find(item => item.name === name)?.version
+      if (installed === undefined) throw new Error('Missing installed version for ' + name)
+      return ok({
+        status: 'listed', installed, registry: null, attempts: [{ registry: null }], omitted: 0,
+        versions: installed === '1.0.0' ? [{ version: '2.0.0', tags: ['latest'], prerelease: false, bundle: true }] : [],
+      })
+    })
+    mock.unary('pluginManager/updateBundle', ({ name, version }: { name: string; version: string }) => {
+      const index = bundles.findIndex(item => item.name === name)
+      const previous = bundles[index]
+      if (previous === undefined) throw new Error('Missing bundle ' + name)
+      bundles[index] = { ...previous, version }
+      return ok({
+        from: previous.version, to: version, step: 'install',
+        result: { changed: true, stage: 'install', application: 'applied', target: name, bundle: name },
+      })
+    })
     mock.unary('pluginManager/registries', ok({ registry: null, fallbackRegistries: [], resolved: null }))
     mock.unary('pluginManager/inspect', ({ spec }: { spec: string }) =>
       ok({ status: 'accepted', kind: 'registry', name: spec, version: '1.0.0', bundle: true, registry: null }))
     mock.unary('pluginManager/installBundle', ({ spec }: { spec: string }) => {
-      const name = spec.split('@')[0]!
-      bundles.push({ ...bundle(name), version: spec === name ? '1.0.0' : '2.0.0' })
-      return ok({ changed: true, stage: 'install', application: 'applied', target: spec, bundle: name })
+      bundles.push(bundle(spec))
+      return ok({ changed: true, stage: 'install', application: 'applied', target: spec, bundle: spec })
     })
     mock.unary('pluginManager/removeBundle', ({ name }: { name: string }) => {
       const index = bundles.findIndex(item => item.name === name)
@@ -300,7 +316,7 @@ it('searches and manages plugins on the selected Host and keeps a disconnected s
   const local = fixture([bundle('local-fixture-plugin')])
   const remoteIcon = 'http://127.0.0.1:8080/icon.svg'
   const remote = fixture([{
-    ...bundle('remote-fixture-plugin'), installTarget: { spec: 'remote-fixture-plugin@2.0.0', version: '2.0.0' },
+    ...bundle('remote-fixture-plugin'), updatable: true,
     meta: { icon: remoteIcon },
   }, bundle('remote-extra-plugin')])
   const roster = webApp.without(['@deepseek-ai/dsh-client-hmr'])
@@ -330,6 +346,9 @@ it('searches and manages plugins on the selected Host and keeps a disconnected s
   const view = render(pane(ctx.slots.renderSlot('root', {})))
   fireEvent.click(await view.findByRole('button', { name: 'Plugins' }))
   expect(await view.findByRole('button', { name: 'View local-fixture-plugin' })).toBeTruthy()
+  const localBundleReads = local.log.calls('pluginManager/listBundles').length
+  expect(localBundleReads).toBeGreaterThan(0)
+  expect(remote.log.calls('pluginManager/listBundles')).toHaveLength(0)
   fireEvent.click(view.getByRole('button', { name: 'Host: Local' }))
   fireEvent.click(await view.findByRole('menuitem', { name: 'SSH Plugin Host' }))
   expect(await view.findByRole('button', { name: 'View remote-fixture-plugin' })).toBeTruthy()
@@ -340,18 +359,27 @@ it('searches and manages plugins on the selected Host and keeps a disconnected s
   expect(view.queryByRole('button', { name: 'View remote-extra-plugin' })).toBeNull()
 
   fireEvent.click(view.getByRole('button', { name: 'View remote-fixture-plugin' }))
-  fireEvent.click(view.getByRole('button', { name: 'Update remote-fixture-plugin' }))
-  await waitFor(() => {
-    expect(remote.log.calls('pluginManager/installBundle')).toMatchObject([{ args: [{ spec: 'remote-fixture-plugin@2.0.0' }] }])
-    expect(remote.log.calls('pluginManager/removeBundle')).toHaveLength(1)
-  })
-  fireEvent.click(await view.findByRole('button', { name: 'Close' }))
+  fireEvent.click(await view.findByRole('button', { name: 'Update to 2.0.0' }))
+  const update = within(await view.findByRole('dialog', { name: 'Update remote-fixture-plugin' }))
+  expect(remote.log.calls('pluginManager/listVersions')).toMatchObject([{ args: [{ name: 'remote-fixture-plugin' }] }])
+  expect(remote.log.calls('pluginManager/readBundleDetail')).toMatchObject([{ args: [{ name: 'remote-fixture-plugin' }] }])
+  expect(remote.log.calls('pluginManager/updateBundle')).toHaveLength(0)
+  fireEvent.click(update.getByRole('button', { name: 'Update' }))
+  expect(await update.findByText('Updated to 2.0.0')).toBeTruthy()
+  expect(remote.log.calls('pluginManager/updateBundle')).toMatchObject([{
+    args: [{ name: 'remote-fixture-plugin', version: '2.0.0', options: { registry: null, requestId: expect.any(String) } }],
+  }])
+  expect(remote.log.calls('pluginManager/installBundle')).toHaveLength(0)
+  expect(remote.log.calls('pluginManager/removeBundle')).toHaveLength(0)
+  fireEvent.click(update.getByRole('button', { name: 'Done' }))
   const uninstall = await view.findByRole('button', { name: 'Uninstall remote-fixture-plugin' })
   await waitFor(() => { expect(uninstall).toHaveProperty('disabled', false) })
   fireEvent.click(uninstall)
   const confirmation = await view.findByRole('dialog', { name: 'Uninstall "remote-fixture-plugin"?' })
   fireEvent.click(within(confirmation).getByRole('button', { name: 'Uninstall' }))
-  await waitFor(() => { expect(remote.log.calls('pluginManager/removeBundle')).toHaveLength(2) })
+  await waitFor(() => {
+    expect(remote.log.calls('pluginManager/removeBundle')).toMatchObject([{ args: [{ name: 'remote-fixture-plugin' }] }])
+  })
   expect(await view.findByText('No plugins match your search.')).toBeTruthy()
 
   fireEvent.click(view.getByRole('button', { name: 'Add plugin' }))
@@ -360,9 +388,13 @@ it('searches and manages plugins on the selected Host and keeps a disconnected s
   fireEvent.change(install.getByLabelText('Package name or address'), { target: { value: 'remote-added-plugin' } })
   fireEvent.click(install.getByRole('button', { name: 'Install' }))
   await waitFor(() => {
-    expect(remote.log.calls('pluginManager/inspect')).toHaveLength(1)
-    expect(remote.log.calls('pluginManager/installBundle')).toHaveLength(2)
+    expect(remote.log.calls('pluginManager/inspect')).toMatchObject([{ args: [{ spec: 'remote-added-plugin' }] }])
+    expect(remote.log.calls('pluginManager/installBundle')).toMatchObject([{ args: [{ spec: 'remote-added-plugin' }] }])
   })
+  expect(local.log.calls('pluginManager/listBundles')).toHaveLength(localBundleReads)
+  expect(local.log.calls('pluginManager/readBundleDetail')).toHaveLength(0)
+  expect(local.log.calls('pluginManager/listVersions')).toHaveLength(0)
+  expect(local.log.calls('pluginManager/updateBundle')).toHaveLength(0)
   expect(local.log.calls('pluginManager/inspect')).toHaveLength(0)
   expect(local.log.calls('pluginManager/installBundle')).toHaveLength(0)
   expect(local.log.calls('pluginManager/removeBundle')).toHaveLength(0)
@@ -382,8 +414,8 @@ async function loadBundledSshProvider() {
   const injections: { kind: string; text: string }[] = []
   const host = {
     effect: (register: () => unknown) => { register() },
-    on(event: string, callback: (rows: typeof injections) => void) {
-      if (event === 'webserver/index-inject') callback(injections)
+    on(event: string, callback: (rows: typeof injections, peer: object) => void) {
+      if (event === 'webserver/index-inject') callback(injections, host.connection.browserPeer)
     },
     inject(_services: string[], install: (scope: object) => void): void { install(host) },
     connection: { admit() {}, browserPeer: {}, fetch: { register() {} } },

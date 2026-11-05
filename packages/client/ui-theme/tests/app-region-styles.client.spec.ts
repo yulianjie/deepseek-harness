@@ -104,6 +104,11 @@ const CHROME_ROWS: readonly ChromeRow[] = [
   },
   {
     file: PLUGIN_MANAGER,
+    selector: '.disconnectedHead',
+    markup: 'client/ui-plugin-manager/src/client/PluginManagerPage.tsx',
+  },
+  {
+    file: PLUGIN_MANAGER,
     selector: '.detailTop',
     markup: 'client/ui-plugin-manager/src/client/PluginManagerPage.tsx',
   },

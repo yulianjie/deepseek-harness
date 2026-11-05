@@ -1,5 +1,5 @@
 import { installParallelCarrier } from './parallel/install.mjs'
-import { isHostIdentity } from './parallel/contract.mjs'
+import { isHostIdentity, isRuntimeUpgrade, isUuid } from './parallel/contract.mjs'
 
 const prefix = '/api/remote-ssh'
 const responseHeaders = {
@@ -35,8 +35,10 @@ function displayStatus(status = {}) {
   }
 }
 
-function displayHost({ id, alias, label, instance, authMode, identityFile }, manager) {
-  return { id, alias, label, instance, authMode, identityFile, status: displayStatus(manager.status(id)) }
+async function displayHost(host, manager) {
+  const { id, alias, label, instance, authMode, identityFile } = host
+  const passwordState = await manager.passwordState(host)
+  return { id, alias, label, instance, authMode, identityFile, passwordState, status: displayStatus(manager.status(id)) }
 }
 
 async function jsonObject(request) {
@@ -110,36 +112,52 @@ export function registerSshRoutes(ctx, manager, broker) {
         return Response.json(result, { headers: responseHeaders })
       } catch (error) {
         const status = Number.isInteger(error?.status) && error.status >= 400 && error.status < 600 ? error.status : 400
+        let upgrade
+        if (error?.code === 'REMOTE_UPGRADE_REQUIRED' && isRuntimeUpgrade(error.upgrade)) {
+          const { hostId, instanceId, bootId, version } = error.upgrade
+          upgrade = { hostId, instanceId, bootId, version }
+        }
         return Response.json({
           error: safeText(error?.message) || '连接操作失败。',
           code: safeText(error?.code, 64),
+          upgrade,
         }, { status, headers: responseHeaders })
       }
     },
   })
 
   register('/hosts', 'GET', async () => ({
-    hosts: (await manager.listHosts()).map(host => displayHost(host, manager)),
+    hosts: await Promise.all((await manager.listHosts()).map(host => displayHost(host, manager))),
   }))
   register('/discover', 'GET', async () => ({
     aliases: (await manager.discover()).map(({ alias }) => alias),
   }))
   register('/hosts/save', 'POST', async body => ({
-    host: displayHost(await manager.save(hostConfig(body)), manager),
+    host: await displayHost(await manager.save(hostConfig(body)), manager),
   }))
   register('/hosts/remove', 'POST', async ({ id }) => {
     await manager.remove(hostId(id))
+    return { ok: true }
+  })
+  register('/hosts/forget-password', 'POST', async ({ id }) => {
+    await manager.forgetPassword(hostId(id))
     return { ok: true }
   })
   installParallelCarrier(ctx, broker)
   register('/parallel/restore-probe', 'POST', async ({ id }, signal) => ({
     expected: await manager.probeRestore(hostId(id), signal),
   }))
-  register('/parallel/open', 'POST', ({ id, expected, password }, signal) => {
+  register('/parallel/open', 'POST', ({ id, expected, password, rememberPassword, upgradeFrom }, signal) => {
     if (expected !== undefined && (!isHostIdentity(expected) || Object.keys(expected).length !== 2)) {
       throw new RequestError(400, 'Harness 实例身份无效。')
     }
-    return broker.open(hostId(id), expected, signal, { password })
+    if (rememberPassword !== undefined && (typeof rememberPassword !== 'boolean' || typeof password !== 'string')) {
+      throw new RequestError(400, '记住密码选项需要与 SSH 密码一起提交。')
+    }
+    if (upgradeFrom !== undefined && (expected === undefined || !isUuid(upgradeFrom))) {
+      throw new RequestError(400, '确认升级需要有效的远程实例身份和运行编号。')
+    }
+    return broker.open(hostId(id), expected, signal, { password, rememberPassword, upgradeFrom })
   })
   register('/parallel/close', 'POST', async ({ capability }) => {
     await broker.close(capability)

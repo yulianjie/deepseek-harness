@@ -20,7 +20,8 @@ export function installParallelCarrier(ctx, broker) {
     const { webServer, connection } = webCtx
     if (!/^(?:127\.\d+\.\d+\.\d+|::1)$/.test(webServer.host) ||
       typeof webServer.registerUpgrade !== 'function' || typeof connection.admit !== 'function' || !connection.browserPeer) return
-    webCtx.on('webserver/index-inject', rows => {
+    webCtx.on('webserver/index-inject', (rows, peer) => {
+      if (peer !== connection.browserPeer) return
       if (/<\/script/i.test(browserProvider)) throw new Error('Invalid parallel SSH boot script')
       rows.push({ kind: 'script', placement: 'head', text: browserProvider })
     })

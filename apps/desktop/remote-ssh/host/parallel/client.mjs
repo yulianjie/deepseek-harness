@@ -2,7 +2,7 @@ import { createParallelContract } from './contract.mjs'
 
 /** Build the browser helpers without closing over any Node or Host state. */
 export function createParallelClient({
-  brokerMuxPath, capabilityHeader, capabilityQuery, hostKey, isCapability, isHostIdentity,
+  brokerMuxPath, capabilityHeader, capabilityQuery, hostKey, isCapability, isHostIdentity, isRuntimeUpgrade,
   isRemoteApi, managementPrefix,
 }) {
   function localEndpoint(input, base) {
@@ -23,6 +23,7 @@ export function createParallelClient({
     if (!response.ok) {
       throw Object.assign(new Error(result?.error ?? 'The SSH broker rejected the request.'), {
         code: result?.code, status: response.status,
+        upgrade: result?.code === 'REMOTE_UPGRADE_REQUIRED' && isRuntimeUpgrade(result.upgrade) ? result.upgrade : undefined,
       })
     }
     if (!result || typeof result !== 'object') throw new Error('The SSH broker returned an invalid response.')
@@ -53,12 +54,13 @@ export function createParallelClient({
       if (result.expected !== null && !isHostIdentity(result.expected)) throw new Error('SSH 工作区恢复记录无效。')
       return result
     }
-    if (!['save', 'remove'].includes(action)) throw new Error('不支持此 SSH 配置操作。')
+    if (!['save', 'remove', 'forget-password'].includes(action)) throw new Error('不支持此 SSH 配置操作。')
     return post(fetch, baseUrl, '/api/remote-ssh/hosts/' + action, data, signal)
   }
 
   /** Obtain a Host transport for one broker lease. A password is used only for this open request. */
-  async function openParallelHost({ id, expected, password, transport = {}, baseUrl = globalThis.document?.baseURI, signal }) {
+  async function openParallelHost({ id, expected, password, rememberPassword, upgradeFrom,
+    transport = {}, baseUrl = globalThis.document?.baseURI, signal }) {
     const base = new URL(baseUrl)
     const streamBase = new URL(transport.streamBaseUrl ?? base)
     if (!['http:', 'https:'].includes(streamBase.protocol) || streamBase.username || streamBase.password ||
@@ -70,9 +72,9 @@ export function createParallelClient({
     const fetch = transport.fetch?.bind(transport) ?? globalThis.fetch.bind(globalThis)
     const createWebSocket = transport.createWebSocket?.bind(transport) ?? (url => new WebSocket(url))
     if (expected !== undefined && !isHostIdentity(expected)) throw new Error('The expected SSH Host identity is invalid.')
-    async function authorize(identity, signal, password) {
+    async function authorize(identity, signal, password, rememberPassword, upgradeFrom) {
       const expected = identity && { hostId: identity.hostId, instanceId: identity.instanceId }
-      const descriptor = await post(fetch, base, managementPrefix + 'open', { id, expected, password }, signal)
+      const descriptor = await post(fetch, base, managementPrefix + 'open', { id, expected, password, rememberPassword, upgradeFrom }, signal)
       if (descriptor.id !== id || !isCapability(descriptor.capability) || !isHostIdentity(descriptor) ||
         (expected !== undefined && hostKey(expected) !== hostKey(descriptor))) {
         throw new Error('The SSH broker returned an invalid Host binding.')
@@ -80,7 +82,9 @@ export function createParallelClient({
       return { ...descriptor, controller: new AbortController() }
     }
     const lifetime = new AbortController()
-    let lease = await authorize(expected, signal, password)
+    const opening = authorize(expected, signal, password, rememberPassword, upgradeFrom)
+    password = undefined
+    let lease = await opening
     const { hostId, instanceId, label, version } = lease
     const identity = { hostId, instanceId }
     const leaseListeners = new Set()
@@ -110,6 +114,7 @@ export function createParallelClient({
     return Object.freeze({
       hostKey: hostKey(identity), id, hostId, instanceId, label, version,
       get bootId() { return lease.bootId },
+      get passwordWarning() { return lease.passwordWarning },
       signal: lifetime.signal,
       leaseAvailable: Object.freeze({
         getSnapshot: () => !lease.controller.signal.aborted,
@@ -148,7 +153,7 @@ export function createParallelClient({
         target.searchParams.set(capabilityQuery, lease.capability)
         return target.href
       },
-      reconnect({ signal, password } = {}) {
+      reconnect({ signal, password, rememberPassword, upgradeFrom } = {}) {
         lifetime.signal.throwIfAborted()
         const setup = signal ? AbortSignal.any([signal, lifetime.signal]) : lifetime.signal
         setup.throwIfAborted()
@@ -156,7 +161,9 @@ export function createParallelClient({
           const previous = lease
           await release(previous)
           setup.throwIfAborted()
-          const replacement = await authorize(identity, setup, password)
+          const opening = authorize(identity, setup, password, rememberPassword, upgradeFrom)
+          password = undefined
+          const replacement = await opening
           if (setup.aborted) {
             await release(replacement)
             setup.throwIfAborted()

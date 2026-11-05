@@ -27,6 +27,10 @@ export function apply(ctx, {
   const idle = { getSnapshot: () => undefined, subscribe: () => () => {} }
   const emptyHost = { alias: '', label: '', instance: 'default', authMode: 'config', identityFile: '' }
   const authLabels = { config: 'OpenSSH 配置', key: '私钥文件', password: '密码' }
+  const passwordWarnings = {
+    SSH_PASSWORD_STORE_FAILED: 'SSH 已连接，但密码未能保存。请检查系统凭据存储。',
+    SSH_PASSWORD_FORGET_FAILED: 'SSH 已连接，但先前记住的密码未能移除。请检查系统凭据存储后重试。',
+  }
   const restoreKey = 'dsh.remote-ssh.restore.'
   const display = {
     connected: ['已连接', 'done'],
@@ -107,10 +111,12 @@ export function apply(ctx, {
     for (const host of hosts) {
       const expected = restoreTarget(host.id)
       if (expected === null) continue
-      if (host.authMode !== 'password') {
-        connect(host, undefined, { expected, probe: expected === undefined })
+      if (host.authMode !== 'password' || host.passwordState === 'saved') {
+        connect(host, { expected, probe: expected === undefined })
       } else if (expected !== undefined) {
-        notices.set(host.id, { message: '输入 SSH 登录密码以恢复此主机上的工作区。' })
+        const prompt = '输入 SSH 登录密码以恢复此主机上的工作区。'
+        const message = host.passwordState === 'unavailable' ? `系统凭据存储不可用。${prompt}` : prompt
+        notices.set(host.id, { message })
       }
     }
   }
@@ -135,15 +141,16 @@ export function apply(ctx, {
     return refreshing
   }
 
-  function run(id, phase, task) {
+  function run(id, phase, task, refreshPasswords = false) {
     if (lifetime.signal.aborted || operations.has(id)) return
     notices.delete(id)
     const current = Promise.resolve().then(() => {
       lifetime.signal.throwIfAborted()
       return task()
     }).catch(error => {
-      if (!lifetime.signal.aborted) notices.set(id, { error: true, message: error.message })
-    }).finally(() => {
+      if (!lifetime.signal.aborted) notices.set(id, { error: true, message: error.message, upgrade: error.upgrade })
+    }).finally(async () => {
+      if (refreshPasswords) await refresh()
       operations.delete(id)
       if (!lifetime.signal.aborted) update()
     })
@@ -161,7 +168,7 @@ export function apply(ctx, {
     }
   }
 
-  function connect(host, password, { expected, probe = false } = {}) {
+  function connect(host, { expected, probe = false, password, rememberPassword, upgradeFrom } = {}) {
     if (entries.has(host.id)) return
     run(host.id, probe ? 'checking' : 'connecting', async () => {
       if (probe) {
@@ -177,7 +184,12 @@ export function apply(ctx, {
       if (expected === undefined && isHostIdentity(status)) {
         expected = { hostId: status.hostId, instanceId: status.instanceId }
       }
-      const channel = await openParallelHost({ ...local, id: host.id, expected, password })
+      const opening = openParallelHost({ ...local, id: host.id, expected, password, rememberPassword, upgradeFrom })
+      password = undefined
+      const channel = await opening
+      const warning = passwordWarnings[channel.passwordWarning]
+      if (warning) notices.set(host.id, { error: true, message: warning })
+      if (rememberPassword && !warning && expected === undefined) rememberRestoreTarget(host.id)
       const entry = { channel }
       try {
         entry.runtime = await factory.create({
@@ -213,21 +225,26 @@ export function apply(ctx, {
         await close(entry)
         throw error
       }
-    })
+    }, host.authMode === 'password')
   }
 
-  function reconnect(host, password) {
+  function reconnect(host, { expected, password, rememberPassword, upgradeFrom } = {}) {
     const entry = entries.get(host.id)
-    if (!entry) return connect(host, password)
+    if (!entry) return connect(host, { expected, password, rememberPassword, upgradeFrom })
     run(host.id, 'reconnecting', async () => {
       // Abort the old event consumers before publishing a new answer Peer.
       entry.connection.reconnect()
-      const { bootChanged } = await entry.channel.reconnect({ signal: lifetime.signal, password })
+      const opening = entry.channel.reconnect({ signal: lifetime.signal, password, rememberPassword, upgradeFrom })
+      password = undefined
+      const { bootChanged } = await opening
       lifetime.signal.throwIfAborted()
       // Its normal retry loop claims the new lease. A second forced reset
       // could close the replacement if the loop already opened its socket.
-      if (bootChanged) notices.set(host.id, { message: '远端 Harness 已重启，先前的终端进程和待提交附件可能需要重新打开。' })
-    })
+      const warning = passwordWarnings[entry.channel.passwordWarning]
+      const bootNotice = bootChanged ? '远端 Harness 已重启，先前的终端进程和待提交附件可能需要重新打开。' : ''
+      const message = [warning, bootNotice].filter(Boolean).join(' ')
+      if (message) notices.set(host.id, { error: Boolean(warning), message })
+    }, host.authMode === 'password')
   }
 
   function disconnect(host) {
@@ -243,7 +260,7 @@ export function apply(ctx, {
     })
   }
 
-  function HostRow({ host, editing, removing, edit, confirmRemove, remove, busy }) {
+  function HostRow({ host, editing, removing, edit, confirmRemove, remove, forget, busy }) {
     const entry = entries.get(host.id)
     const available = useStore(entry?.channel.leaseAvailable ?? idle)
     const connection = useStore(entry?.connection.state ?? idle)
@@ -257,30 +274,54 @@ export function apply(ctx, {
     const authMode = host.authMode ?? 'config'
     const needsConnection = !entry || !available
     const blocked = Boolean(phase) || editing || removing
-    const connectLabel = entry ? '重新连接' : '连接'
+    const upgrade = notice?.upgrade
+    const connectLabel = upgrade ? '重启并升级' : entry ? '重新连接' : '连接'
     const start = entry ? reconnect : connect
+    function startConnection(options) {
+      if (upgrade) {
+        if (!globalThis.confirm('升级会重启此远程实例。已保存的项目和会话会保留，运行中的任务和终端可能中断。确定继续？')) return false
+        const { hostId, instanceId, bootId } = upgrade
+        start(host, { ...options, expected: { hostId, instanceId }, upgradeFrom: bootId })
+      } else {
+        start(host, options)
+      }
+      return true
+    }
     const passwordForm = authMode === 'password' && needsConnection && !editing && !removing
+    const passwordSaved = host.passwordState === 'saved'
+    const passwordUnavailable = host.passwordState === 'unavailable'
+    const instanceLabel = host.instance !== 'default' && `实例 ${host.instance}`
     return h('li', { style: style.row },
       h('div', { style: style.actions }, h('strong', null, host.label || host.alias),
         h(StateDot, { state: dot }), h('span', null, label),
         entry?.runtime.hostKey === selected && entry && h('span', { style: style.secondary }, '当前会话 Host')),
-      h('p', { style: style.secondary }, [host.alias, host.instance, authLabels[authMode], entry?.channel.version].filter(Boolean).join(' · ')),
+      h('p', { style: style.secondary }, [host.alias, instanceLabel, authLabels[authMode], entry?.channel.version].filter(Boolean).join(' · ')),
+      passwordSaved && h('p', { style: style.secondary }, '密码已保存在系统凭据存储中。'),
+      passwordUnavailable && h('p', { style: style.secondary }, '系统凭据存储不可用，可手动输入密码。'),
       notice && h('p', { role: notice.error ? 'alert' : 'status' }, notice.message),
       h('div', { style: style.actions },
-        passwordForm && h('form', { style: style.actions, autoComplete: 'off', onSubmit(event) {
+        passwordForm && passwordSaved && h(Button, { variant: 'primary', size: 'sm', disabled: blocked || busy,
+          onClick: () => startConnection({ expected: restoreTarget(host.id) ?? undefined }),
+        }, upgrade ? '使用已记住的密码升级' : entry ? '使用已记住的密码重连' : '使用已记住的密码连接'),
+        passwordForm && h('form', { key: host.passwordState, style: style.actions, autoComplete: 'off', onSubmit(event) {
           event.preventDefault()
           const form = event.currentTarget
-          const password = new FormData(form).get('ssh-password')
-          form.reset()
-          if (!blocked && password) start(host, password)
+          const data = new FormData(form)
+          const password = data.get('ssh-password')
+          const rememberPassword = data.has('remember-password') || (passwordSaved ? false : undefined)
+          if (!blocked && !busy && password && startConnection({ password, rememberPassword })) form.reset()
         } },
         h(Input, { type: 'password', name: 'ssh-password', 'aria-label': 'SSH 登录密码', placeholder: 'SSH 登录密码',
-          autoComplete: 'off', required: true, maxLength: 1023, disabled: blocked }),
-        h(Button, { variant: 'primary', size: 'sm', type: 'submit', disabled: blocked }, connectLabel)),
+          autoComplete: 'off', required: true, maxLength: 1023, disabled: blocked || busy }),
+        h('label', null, h('input', { type: 'checkbox', name: 'remember-password', defaultChecked: passwordSaved,
+          disabled: blocked || busy || passwordUnavailable,
+        }), '记住密码'),
+        h(Button, { variant: passwordSaved ? 'outline' : 'primary', size: 'sm', type: 'submit', disabled: blocked || busy }, connectLabel)),
         authMode !== 'password' && needsConnection && h(Button, {
-          variant: 'primary', size: 'sm', disabled: blocked, onClick: () => start(host),
+          variant: 'primary', size: 'sm', disabled: blocked, onClick: () => startConnection(),
         }, connectLabel),
         entry && h(Button, { variant: 'outline', size: 'sm', disabled: Boolean(phase), onClick: () => disconnect(host) }, '断开连接'),
+        passwordSaved && !editing && !removing && h(Button, { size: 'sm', disabled: busy || Boolean(phase), onClick: forget }, '忘记密码'),
         !entry && h(Button, { size: 'sm', disabled: busy || Boolean(phase), onClick: edit }, '编辑'),
         !entry && h(Button, { size: 'sm', disabled: busy || Boolean(phase),
           onClick: removing ? remove : confirmRemove,
@@ -301,11 +342,17 @@ export function apply(ctx, {
       try {
         const result = await configureParallelHost({ ...local, action, data })
         if (lifetime.signal.aborted) return
-        if (action === 'remove') rememberRestoreTarget(data.id)
+        if (action === 'remove') {
+          rememberRestoreTarget(data.id)
+          notices.delete(data.id)
+        }
+        if (action === 'forget-password') notices.delete(data.id)
         if (action === 'save') {
-          const { id, alias, instance } = result.host
+          const { id, alias, instance, authMode, identityFile } = result.host
           const previous = hosts.find(host => host.id === id)
           if (!previous || previous.alias !== alias || previous.instance !== instance) rememberRestoreTarget(id, null)
+          if (!previous || previous.alias !== alias || previous.instance !== instance ||
+              previous.authMode !== authMode || previous.identityFile !== identityFile) notices.delete(id)
         }
         done(result)
         if (action !== 'discover') {
@@ -339,13 +386,12 @@ export function apply(ctx, {
           event.preventDefault()
           const { id, alias, label, instance, authMode, identityFile } = draft
           void configure('save', {
-            id, alias: alias.trim(), label: label.trim() || undefined, instance: instance.trim(), authMode,
+            id, alias: alias.trim(), label: label.trim() || undefined, instance: instance.trim() || 'default', authMode,
             identityFile: authMode === 'key' ? identityFile : undefined,
           }, () => setDraft(null))
         } },
         field('alias', 'SSH 别名或地址', { required: true, maxLength: 255 }),
         field('label', '显示名称', { maxLength: 100 }),
-        field('instance', '远程实例', { required: true, maxLength: 64 }),
         h('fieldset', { style: { border: 0, padding: 0, margin: 0, minWidth: 0 }, disabled: busy },
           h('legend', null, '身份验证方式'),
           h('div', { style: style.actions }, Object.entries(authLabels).map(([value, label]) =>
@@ -355,7 +401,11 @@ export function apply(ctx, {
         draft.authMode === 'key' && field('identityFile', '本机私钥路径', {
           required: true, maxLength: 2048, placeholder: '~/.ssh/id_ed25519',
         }),
-        draft.authMode === 'password' && h('p', { style: style.secondary }, '连接和重连时输入密码。'),
+        draft.authMode === 'password' && h('p', { style: style.secondary }, '连接时可选择将密码保存在本机的系统凭据存储中。'),
+        h('details', null,
+          h('summary', null, draft.instance && draft.instance !== 'default' ? `高级选项 · 远程实例 ${draft.instance}` : '高级选项'),
+          field('instance', '远程实例名称', { maxLength: 64, placeholder: 'default' }),
+          h('p', { style: style.secondary }, '同一 SSH 账号可使用不同实例分别保存项目和会话。留空使用默认实例，更改名称会切换到另一套项目和会话。')),
         h('div', { style: style.actions },
           h(Button, { variant: 'primary', type: 'submit', disabled: busy }, '保存主机'),
           h(Button, { disabled: busy, onClick: () => setDraft(null) }, '取消'))),
@@ -369,6 +419,7 @@ export function apply(ctx, {
               authMode: host.authMode ?? 'config', identityFile: host.identityFile ?? '' }),
             confirmRemove: () => setRemoveId(removeId === host.id ? undefined : host.id),
             remove: () => configure('remove', { id: host.id }, () => setRemoveId(undefined)),
+            forget: () => configure('forget-password', { id: host.id }, () => {}),
           }))) : !loading && !error && h('p', { style: style.secondary }, '尚未配置 SSH 主机。')))
   }
 

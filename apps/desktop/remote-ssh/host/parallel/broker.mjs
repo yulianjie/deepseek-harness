@@ -69,7 +69,7 @@ export class ParallelHostBroker {
     this.#availability = undefined
   }
 
-  async open(id, expected, signal, { password } = {}) {
+  async open(id, expected, signal, { password, rememberPassword, upgradeFrom } = {}) {
     const availability = this.#availability?.signal
     if (!availability || availability.aborted) throw unavailable()
     signal?.throwIfAborted()
@@ -87,7 +87,7 @@ export class ParallelHostBroker {
     }
     setup.addEventListener('abort', cancel, { once: true })
     try {
-      const connection = this.#manager.connectNative(id, { password, expected })
+      const connection = this.#manager.connectNative(id, { password, rememberPassword, expected, upgradeFrom })
       password = undefined
       const target = await connection
       setup.removeEventListener('abort', cancel)
@@ -112,8 +112,8 @@ export class ParallelHostBroker {
       channel.lifetime.addEventListener('abort', () => this.#retire(channel), { once: true })
       channel.attachTimer = setTimeout(() => this.#retire(channel), attachTimeoutMs)
       channel.attachTimer.unref()
-      const { hostId, instanceId, bootId, version, label } = target
-      return { id, hostId, instanceId, bootId, version, label, capability: channel.capability }
+      const { hostId, instanceId, bootId, version, label, passwordWarning } = target
+      return { id, hostId, instanceId, bootId, version, label, capability: channel.capability, passwordWarning }
     } catch (error) {
       await this.#retire(channel)
       throw error

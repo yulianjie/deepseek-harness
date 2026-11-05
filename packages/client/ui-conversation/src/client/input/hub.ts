@@ -5,7 +5,6 @@
  * returns; Session-scope disposal releases the shell and its resources.
  */
 import type {} from '@deepseek-ai/dsh-client-product-analytics/client'
-import type { ModelSelectionProjection } from '@deepseek-ai/dsh-api-session-controller/types'
 import type { PlanProjection } from '@deepseek-ai/dsh-plan-mode/types'
 import type { GoalProjection } from '@deepseek-ai/dsh-goal/types'
 import type { Context } from '@deepseek-ai/cordis'
@@ -14,13 +13,14 @@ import type {
 } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { TranslateNS } from '@deepseek-ai/dsh-client-locale/client'
-import type { InboxState } from '@deepseek-ai/dsh-agent/types'
+import type { InboxState, ModelSelectionProjection } from '@deepseek-ai/dsh-agent/types'
 import type { HostStorage, ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
 import type {
   DraftAttachmentId, DraftAttachmentSerializationResult, DraftInitializationOptions, DraftInitializationResult, InputTriggerController,
   SessionInputResolver, SessionInput, SubmitOutcome,
 } from '../contract/input.ts'
 import type { ComposerKeyboard } from '../contract/draft-editor.ts'
+import type { ComposerBlocks } from '../contract/composer-blocks.ts'
 import type { InputSubmitMode } from '../contract/composer-submission.ts'
 import type { PopupDismissFace } from './facade.ts'
 import { SessionInputShell } from './facade.ts'
@@ -40,12 +40,14 @@ interface InputTriggerServiceFace {
 
 /** Attachment-send face resolved lazily to keep hub/service construction acyclic. */
 interface ConversationAttachmentFace {
+  readonly blocks: ComposerBlocks
   sendSession(
     session: SessionFace,
     text: string,
     attachmentIds: readonly DraftAttachmentId[],
     mode: InputSubmitMode,
     signal?: AbortSignal,
+    accept?: () => void,
   ): Promise<SubmitOutcome>
   serializeDraftAttachments(attachmentIds: readonly DraftAttachmentId[]): Promise<DraftAttachmentSerializationResult>
   releaseDraftAttachment(id: DraftAttachmentId): void
@@ -124,7 +126,14 @@ export class InputHub implements SessionInputResolver {
       inputTriggers: () => this.controller(actx),
       popup: () => this.popup(actx),
       inbox: session.projections.faceOf('inbox') as ObservableSnapshot<InboxState | undefined>,
-      defaultSink: (text, attachmentIds, mode, signal) => this.sink(session, text, attachmentIds, mode, signal),
+      defaultSink: (text, attachmentIds, mode, signal, accept) => this.sink(session, text, attachmentIds, mode, signal, accept),
+      quoteRemoveLabel: () => this.t('quote.remove'),
+      quoteInsertionAllowed: () => {
+        const state = session.getSnapshot()
+        return !state.removed && (state.subagent === null
+          || (state.subagent.address.mode === 'continuable' && state.subagent.parentAvailable === true))
+          && this.conversation().blocks.storeFor(session.sessionId).getSnapshot() === undefined
+      },
       steerQueue: () => { void this.steerQueue(session, shell) },
       commandAttachments: {
         serialize: async (ids) => {
@@ -230,10 +239,10 @@ export class InputHub implements SessionInputResolver {
   }
 
   /**
-   * Default sink: optimistic clear + prompt. The session is always a real
-   * host entity (materialized when its workspace was picked), so there is
-   * exactly one path; a failed first prompt is an ordinary prompt failure
-   * (banner via promptError, draft restored only while untouched).
+   * Default sink: prompt while the composer holds the sent draft. The session
+   * is always a real host entity (materialized when its workspace was picked),
+   * so there is exactly one path; a refused or failed prompt is an ordinary
+   * prompt failure (banner via promptError, draft kept in the composer).
    */
   private sink(
     session: SessionFace,
@@ -241,9 +250,10 @@ export class InputHub implements SessionInputResolver {
     attachmentIds: readonly DraftAttachmentId[],
     mode: InputSubmitMode,
     signal: AbortSignal,
+    accept: () => void,
   ): Promise<SubmitOutcome> {
     if (text === '' && attachmentIds.length === 0) return Promise.resolve({ kind: 'success' })
-    return this.conversation().sendSession(session, text, attachmentIds, mode, signal)
+    return this.conversation().sendSession(session, text, attachmentIds, mode, signal, accept)
   }
 
   /**

@@ -49,6 +49,21 @@ export class ConnectionError extends Error {
   }
 }
 
+/** Identify the effective SSH account and routing options for a remembered password. */
+export function resolvedPasswordTarget({ hostname, user, port, settings }) {
+  return JSON.stringify([hostname, user, port, settings.proxyjump, settings.proxycommand, settings.hostkeyalias]);
+}
+
+export function passwordTargetChanged() {
+  return new ConnectionError('SSH_PASSWORD_TARGET_CHANGED', 'SSH 连接目标已更改。请确认主机配置并手动输入密码。');
+}
+
+function checkPasswordTarget(authentication, config) {
+  if (authentication?.target !== undefined && authentication.target !== resolvedPasswordTarget(config)) {
+    throw passwordTargetChanged();
+  }
+}
+
 function assertPort(port) {
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
     throw new ConnectionError('INVALID_PORT', 'SSH forward requires a numeric port from 1 to 65535.');
@@ -375,6 +390,9 @@ export class OpenSsh {
 
   async runScript(alias, script, { signal, onStderr, timeout = 600_000, identityFile, authentication } = {}) {
     if (typeof script !== 'string' && !Buffer.isBuffer(script)) throw new TypeError('Expected a remote script.');
+    if (authentication?.target !== undefined) {
+      checkPasswordTarget(authentication, await this.resolve(alias, { signal, identityFile }));
+    }
     const filename = identityFile === undefined ? undefined : await readableIdentityFile(identityFile, this.home);
     const args = buildSshArgs(alias, {
       configPath: this.configPath, identityFile: filename, passwordAuth: authentication?.password !== undefined,
@@ -385,7 +403,9 @@ export class OpenSsh {
 
   async openTunnel(alias, remotePort, { signal, identityFile, authentication } = {}) {
     assertPort(remotePort);
-    const { settings, identityFile: filename } = await this.resolve(alias, { signal, identityFile });
+    const config = await this.resolve(alias, { signal, identityFile });
+    checkPasswordTarget(authentication, config);
+    const { settings, identityFile: filename } = config;
     // ClearAllForwardings=yes would clear the command-line -L as well.
     if (settings.localforward || settings.remoteforward || settings.dynamicforward) {
       throw new ConnectionError('SSH_CONFIGURED_FORWARD', 'Use a dedicated SSH alias without configured LocalForward, RemoteForward or DynamicForward rules.');

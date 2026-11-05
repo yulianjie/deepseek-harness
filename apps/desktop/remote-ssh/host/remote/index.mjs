@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { ConnectionError } from '../connection/ssh.mjs';
+import { isRuntimeUpgrade } from '../parallel/contract.mjs';
 
-export const DSH_VERSION = '0.2.1-rc.5';
+export const DSH_VERSION = '0.2.2-rc.1';
 export const REMOTE_API_PREFIX = '/api/dsh-remote-ssh';
 
 const RESULT = 'DSH_REMOTE_SSH_RESULT ';
@@ -24,13 +25,16 @@ const sources = {
   'workspace.css': '../../ui/workspace.css',
 };
 
-export async function buildRemoteScript(action, instance = 'default', expected) {
+export async function buildRemoteScript(action, instance = 'default', expected, upgradeFrom) {
   if (!['deploy', 'stop'].includes(action)) throw new TypeError('Unknown remote runtime action');
   if (typeof instance !== 'string' || !INSTANCE_NAME.test(instance)) {
     throw new TypeError('Remote instance must be 1–64 letters, digits, dots, dashes or underscores and start with a letter or digit');
   }
   if (expected !== undefined && (!UUID.test(expected?.hostId) || !UUID.test(expected?.instanceId))) {
     throw new TypeError('Invalid expected remote Harness identity');
+  }
+  if (upgradeFrom !== undefined && (action !== 'deploy' || expected === undefined || typeof upgradeFrom !== 'string' || !UUID.test(upgradeFrom))) {
+    throw new TypeError('A remote upgrade requires an expected instance and boot identity');
   }
   const [nodeBootstrap, bootstrap, ...assets] = await Promise.all([
     readFile(new URL('./node-bootstrap.sh', import.meta.url), 'utf8'),
@@ -39,7 +43,7 @@ export async function buildRemoteScript(action, instance = 'default', expected) 
   ]);
   const files = Object.fromEntries(Object.keys(sources).map((name, index) => [name, assets[index]]));
   const bundle = createHash('sha256').update(JSON.stringify(files)).digest('hex');
-  const input = JSON.stringify({ action, instance, version: DSH_VERSION, bundle, files, expected });
+  const input = JSON.stringify({ action, instance, version: DSH_VERSION, bundle, files, expected, upgradeFrom });
   return `#!/bin/sh
 set -eu
 umask 077
@@ -52,7 +56,7 @@ DSH_REMOTE_SSH_BOOTSTRAP
 `;
 }
 
-/** Build the one-time read-only probe for workspaces created by the pinned release. */
+/** Build the read-only probe for existing remote workspaces. */
 export async function buildRestoreProbeScript(instance) {
   if (typeof instance !== 'string' || !INSTANCE_NAME.test(instance)) throw new TypeError('Invalid SSH instance name');
   const [nodeBootstrap, probe] = await Promise.all([
@@ -90,6 +94,11 @@ function parseResult(stdout) {
     throw new Error('Remote deployment returned invalid data');
   }
   if (result?.error && typeof result.error === 'string') {
+    if (result.code === 'REMOTE_UPGRADE_REQUIRED' && isRuntimeUpgrade(result.upgrade)) {
+      const { hostId, instanceId, bootId, version } = result.upgrade;
+      const error = new ConnectionError(result.code, `远程实例正在运行 Harness ${version}。确认重启后可升级到 ${DSH_VERSION}。`);
+      throw Object.assign(error, { upgrade: { hostId, instanceId, bootId, version } });
+    }
     if (PUBLIC_DIAGNOSTICS.has(result.code) && result.error.length <= 2_048 && !/\p{Cc}/u.test(result.error)) {
       throw new ConnectionError(result.code, result.error);
     }
@@ -99,8 +108,8 @@ function parseResult(stdout) {
 }
 
 export function createRemoteDeployment({ execSsh }) {
-  async function run(action, host, onProgress, signal, authentication, expected) {
-    const input = await buildRemoteScript(action, host.instance, expected);
+  async function run(action, host, onProgress, signal, authentication, expected, upgradeFrom) {
+    const input = await buildRemoteScript(action, host.instance, expected, upgradeFrom);
     signal?.throwIfAborted();
     let remainder = '';
     const report = (line) => {
@@ -126,10 +135,10 @@ export function createRemoteDeployment({ execSsh }) {
   }
 
   return {
-    async probe(host, signal) {
+    async probe(host, signal, authentication) {
       const input = await buildRestoreProbeScript(host.instance);
       signal?.throwIfAborted();
-      const { stdout } = await execSsh(host, { input, signal, timeoutMs: 45_000 });
+      const { stdout } = await execSsh(host, { input, signal, timeoutMs: 45_000, authentication });
       const { expected } = parseResult(stdout);
       if (expected === null) return null;
       if (!UUID.test(expected?.hostId) || !UUID.test(expected?.instanceId)) {
@@ -137,8 +146,8 @@ export function createRemoteDeployment({ execSsh }) {
       }
       return { hostId: expected.hostId, instanceId: expected.instanceId };
     },
-    async deploy(host, onProgress, signal, authentication, expected) {
-      const value = await run('deploy', host, onProgress, signal, authentication, expected);
+    async deploy(host, onProgress, signal, authentication, expected, upgradeFrom) {
+      const value = await run('deploy', host, onProgress, signal, authentication, expected, upgradeFrom);
       if (!UUID.test(value?.hostId) || !UUID.test(value?.instanceId) || !UUID.test(value?.bootId)
         || value.version !== DSH_VERSION
         || !Number.isInteger(value.remotePort) || value.remotePort < 1 || value.remotePort > 65535

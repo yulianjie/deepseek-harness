@@ -65,7 +65,8 @@ try {
   const worker = spawn('flock', ['--exclusive', '--wait', '180', '--conflict-exit-code', '75', '--close',
     join(instance, 'deploy.lock'), process.execPath, join(bundle, 'runtime.mjs'),
     input.action, root, instance, input.version, process.argv[2],
-    ...(input.expected === undefined ? [] : [JSON.stringify(input.expected)])], { stdio: ['ignore', 'inherit', 'inherit'] });
+    ...(input.expected === undefined ? [] : [JSON.stringify(input.expected)]),
+    ...(input.upgradeFrom === undefined ? [] : [input.upgradeFrom])], { stdio: ['ignore', 'inherit', 'inherit'] });
   const code = await new Promise((resolve, reject) => {
     worker.once('error', reject);
     worker.once('exit', resolve);

@@ -1,7 +1,7 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { ConnectionError, OpenSsh, resolveIdentityFile } from './ssh.mjs';
+import { ConnectionError, OpenSsh, resolveIdentityFile, resolvedPasswordTarget, passwordTargetChanged } from './ssh.mjs';
 import { isSshAlias } from './ssh-config.mjs';
 
 export { ConnectionError, OpenSsh, buildSshArgs, diagnoseSshFailure, parseSshConfig } from './ssh.mjs';
@@ -9,6 +9,7 @@ export { discoverSshAliases } from './ssh-config.mjs';
 
 const ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const INSTANCE = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
+const PASSWORD_RECORD = /^v1:([0-9a-f]{64})\n/;
 
 function unknownHost() {
   return new ConnectionError('HOST_NOT_FOUND', 'The SSH host configuration was not found.');
@@ -51,6 +52,18 @@ function connectionPassword(authMode, password) {
   return password;
 }
 
+function passwordStoreUnavailable() {
+  return new ConnectionError('SSH_PASSWORD_STORE_UNAVAILABLE', '无法访问系统凭据存储。请检查系统凭据存储，或手动输入 SSH 密码。');
+}
+
+function passwordStoreFailed() {
+  return new ConnectionError('SSH_PASSWORD_STORE_FAILED', '无法更新系统凭据存储中的 SSH 密码。请检查系统凭据存储后重试。');
+}
+
+function digest(value) {
+  return createHash('sha256').update(value).digest('hex');
+}
+
 function sameConnection(a, b) {
   return a.alias === b.alias && a.instance === b.instance && a.authMode === b.authMode && a.identityFile === b.identityFile;
 }
@@ -87,13 +100,15 @@ export class ConnectionManager {
   #ssh;
   #deploy;
   #probe;
+  #credentialStore;
+  #credentialQueue = Promise.resolve();
   #restoreLifetime = new AbortController();
   #restoreProbes = new Set();
   #entries = new Map();
   #queue = Promise.resolve();
   #disposal;
 
-  constructor({ stateDir, ssh = new OpenSsh(), deploy, probe }) {
+  constructor({ stateDir, ssh = new OpenSsh(), deploy, probe, credentialStore }) {
     if (typeof stateDir !== 'string' || !stateDir || typeof deploy !== 'function') {
       throw new TypeError('ConnectionManager requires stateDir and deploy.');
     }
@@ -101,6 +116,7 @@ export class ConnectionManager {
     this.#ssh = ssh;
     this.#deploy = deploy;
     this.#probe = probe;
+    this.#credentialStore = credentialStore;
   }
 
   #schedule(action) {
@@ -110,6 +126,115 @@ export class ConnectionManager {
     });
     this.#queue = next.catch(() => {});
     return next;
+  }
+
+  #credentialOperation(action) {
+    const next = this.#credentialQueue.then(() => action(this.#credentialStore));
+    this.#credentialQueue = next.catch(() => {});
+    return next;
+  }
+
+  /** Project the vault state without returning a stored password. */
+  async passwordState(host) {
+    if (host.authMode !== 'password') return undefined;
+    if (!this.#credentialStore) return 'unavailable';
+    try {
+      const stored = await this.#credentialOperation(store => store.get(host.id));
+      return stored === undefined ? 'none' : 'saved';
+    } catch {
+      return 'unavailable';
+    }
+  }
+
+  async #forgetPassword(id) {
+    const entry = this.#entries.get(id);
+    if (entry) entry.rememberPassword = undefined;
+    if (!this.#credentialStore) return;
+    try {
+      await this.#credentialOperation(store => store.delete(id));
+    } catch {
+      throw passwordStoreFailed();
+    }
+  }
+
+  /** Remove the local credential while keeping an established connection open. */
+  forgetPassword(id) {
+    return this.#schedule(async () => {
+      const host = await this.#readHost(id);
+      if (host.authMode !== 'password') return;
+      await this.#cancelRestoreProbes(id);
+      await this.#forgetPassword(id);
+    });
+  }
+
+  async #storedAuthentication(host) {
+    if (!this.#credentialStore) return { password: connectionPassword(host.authMode, undefined) };
+    let record;
+    try {
+      record = await this.#credentialOperation(store => store.get(host.id));
+    } catch {
+      throw passwordStoreUnavailable();
+    }
+    if (record === undefined) return { password: connectionPassword(host.authMode, undefined) };
+    const version = PASSWORD_RECORD.exec(record);
+    const stored = { digest: digest(record), binding: version?.[1] };
+    try {
+      const password = connectionPassword(host.authMode, version && record.slice(version[0].length));
+      return { password, stored };
+    } catch {
+      throw await this.#rejectStoredPassword(host.id, stored, 'SSH_SAVED_PASSWORD_REJECTED');
+    }
+  }
+
+  #bindPassword(host, authentication, config, rememberPassword) {
+    if (!authentication.stored && rememberPassword !== true) return undefined;
+    const target = resolvedPasswordTarget(config);
+    const binding = digest(JSON.stringify([host.alias, host.instance, host.authMode, target]));
+    if (authentication.stored && authentication.stored.binding !== binding) throw passwordTargetChanged();
+    authentication.target = target;
+    return binding;
+  }
+
+  async #rejectStoredPassword(id, stored, code) {
+    try {
+      await this.#credentialOperation(async store => {
+        const current = await store.get(id);
+        if (current !== undefined && digest(current) === stored.digest) await store.delete(id);
+      });
+    } catch {
+      return new ConnectionError(code, '已记住的 SSH 密码无法使用，也无法从系统凭据存储中移除。请输入当前密码后重试。');
+    }
+    return code === 'SSH_PASSWORD_TARGET_CHANGED' ? passwordTargetChanged()
+      : new ConnectionError(code, '已记住的 SSH 密码无法验证。请输入当前密码后重试。');
+  }
+
+  #passwordFailure(host, authentication, error) {
+    const { stored } = authentication;
+    if (stored && error?.code === 'SSH_AUTH_FAILED') {
+      return this.#rejectStoredPassword(host.id, stored, 'SSH_SAVED_PASSWORD_REJECTED');
+    }
+    if (stored && error?.code === 'SSH_PASSWORD_TARGET_CHANGED') {
+      return this.#rejectStoredPassword(host.id, stored, error.code);
+    }
+    return error;
+  }
+
+  async #persistPassword(entry, authentication, binding) {
+    if (entry.rememberPassword === undefined) return;
+    try {
+      await this.#credentialOperation(async store => {
+        const { host: { id }, controller: { signal }, rememberPassword } = entry;
+        if (signal.aborted || rememberPassword === undefined) return;
+        if (rememberPassword) {
+          if (!store) throw passwordStoreUnavailable();
+          await store.set(id, `v1:${binding}\n${authentication.password}`);
+        } else if (store) {
+          await store.delete(id);
+        }
+      });
+    } catch {
+      entry.passwordWarning = entry.rememberPassword ? 'SSH_PASSWORD_STORE_FAILED' : 'SSH_PASSWORD_FORGET_FAILED';
+    }
   }
 
   async #readHost(id) {
@@ -163,13 +288,18 @@ export class ConnectionManager {
       const filename = join(this.#directory, `${host.id}.json`);
       const temp = join(this.#directory, `${randomUUID()}.tmp`);
       await mkdir(this.#directory, { recursive: true, mode: 0o700 });
+      const changed = existing && !sameConnection(existing, host);
       try {
         await writeFile(temp, `${JSON.stringify(host)}\n`, { flag: 'wx', mode: 0o600 });
+        if (changed) {
+          await this.#cancelRestoreProbes(host.id);
+          if (existing.authMode === 'password') await this.#forgetPassword(host.id);
+        }
         await rename(temp, filename);
       } finally {
         await rm(temp, { force: true });
       }
-      if (existing && !sameConnection(existing, host)) {
+      if (changed) {
         await this.#disconnect(host.id);
       }
       return host;
@@ -178,7 +308,9 @@ export class ConnectionManager {
 
   remove(id) {
     return this.#schedule(async () => {
-      await this.#readHost(id);
+      const host = await this.#readHost(id);
+      await this.#cancelRestoreProbes(id);
+      if (host.authMode === 'password') await this.#forgetPassword(id);
       await rm(join(this.#directory, `${id}.json`), { force: true });
       await this.#disconnect(id);
     });
@@ -197,26 +329,50 @@ export class ConnectionManager {
 
   /** Find projects in a legacy SSH instance without provisioning a Host. */
   async probeRestore(id, signal) {
-    const host = await this.#schedule(() => this.#readHost(id));
-    connectionPassword(host.authMode, undefined);
-    const lifetime = this.#restoreLifetime.signal;
-    const probeSignal = signal ? AbortSignal.any([signal, lifetime]) : lifetime;
-    probeSignal.throwIfAborted();
-    const probe = Promise.resolve().then(() => this.#probe(host, probeSignal));
-    this.#restoreProbes.add(probe);
+    const probe = await this.#schedule(async () => {
+      const host = await this.#readHost(id);
+      const controller = new AbortController();
+      const signals = [controller.signal, this.#restoreLifetime.signal];
+      if (signal) signals.push(signal);
+      const probeSignal = AbortSignal.any(signals);
+      probeSignal.throwIfAborted();
+      const probe = { id, controller };
+      probe.task = this.#probeHost(host, probeSignal).finally(() => this.#restoreProbes.delete(probe));
+      void probe.task.catch(() => {});
+      this.#restoreProbes.add(probe);
+      return probe;
+    });
+    return probe.task;
+  }
+
+  async #cancelRestoreProbes(id) {
+    const probes = [...this.#restoreProbes].filter(probe => probe.id === id);
+    for (const { controller } of probes) controller.abort(cancelled());
+    await Promise.allSettled(probes.map(probe => probe.task));
+  }
+
+  async #probeHost(host, signal) {
+    const authentication = host.authMode === 'password' ? await this.#storedAuthentication(host) : {};
     try {
-      return await probe;
+      signal.throwIfAborted();
+      if (authentication.stored) {
+        const config = await this.#ssh.resolve(host.alias, { signal, identityFile: host.identityFile });
+        this.#bindPassword(host, authentication, config);
+      }
+      return await this.#probe(host, signal, authentication);
     } catch (error) {
-      if (probeSignal.aborted) throw probeSignal.reason;
-      if (error instanceof ConnectionError) throw error;
+      authentication.password = undefined;
+      if (signal.aborted) throw signal.reason;
+      const failure = await this.#passwordFailure(host, authentication, error);
+      if (failure instanceof ConnectionError) throw failure;
       throw new ConnectionError('SSH_RESTORE_PROBE_FAILED', '无法读取远端已有项目，请手动连接。');
     } finally {
-      this.#restoreProbes.delete(probe);
+      authentication.password = undefined;
     }
   }
 
-  /** Open a server-side SSH forward. A password is used only during a new connection's setup. */
-  async connectNative(id, { password, expected } = {}) {
+  /** Open a server-side SSH forward. Remember an explicitly supplied password after setup succeeds. */
+  async connectNative(id, { password, rememberPassword, expected, upgradeFrom } = {}) {
     const entry = await this.#schedule(async () => {
       const host = await this.#readHost(id);
       const current = this.#entries.get(id);
@@ -224,13 +380,16 @@ export class ConnectionManager {
           sameConnection(current.host, host)) {
         return current;
       }
-      const authentication = { password: connectionPassword(host.authMode, password) };
+      const manual = host.authMode === 'password' && password !== undefined;
+      const authentication = host.authMode === 'password' && !manual ? await this.#storedAuthentication(host)
+        : { password: connectionPassword(host.authMode, password) };
       password = undefined;
       await this.#disconnect(id);
       if (this.#disposal) throw cancelled();
-      const entry = { host, controller: new AbortController(), readiness: newReadiness(), state: 'connecting', stage: 'resolve' };
+      const entry = { host, controller: new AbortController(), readiness: newReadiness(), state: 'connecting', stage: 'resolve',
+        rememberPassword: manual ? rememberPassword : undefined };
       this.#entries.set(id, entry);
-      entry.task = this.#supervise(entry, authentication, expected);
+      entry.task = this.#supervise(entry, authentication, expected, upgradeFrom);
       return entry;
     }).finally(() => {
       password = undefined;
@@ -240,7 +399,8 @@ export class ConnectionManager {
       entry.controller.signal.throwIfAborted();
     } while (entry.state !== 'connected');
     const { hostId, instanceId, bootId, version, token } = entry.deployment;
-    return { label: entry.host.label, hostId, instanceId, bootId, version, token, ...entry.forward };
+    return { label: entry.host.label, hostId, instanceId, bootId, version, token, ...entry.forward,
+      ...(entry.passwordWarning ? { passwordWarning: entry.passwordWarning } : {}) };
   }
 
   disconnect(id) {
@@ -263,13 +423,13 @@ export class ConnectionManager {
       for (const entry of this.#entries.values()) entry.controller.abort(cancelled());
       this.#disposal = Promise.all([
         this.#queue.then(() => Promise.all([...this.#entries.keys()].map((id) => this.#disconnect(id)))),
-        Promise.allSettled(this.#restoreProbes),
-      ]);
+        Promise.allSettled([...this.#restoreProbes].map(probe => probe.task)),
+      ]).then(() => this.#credentialQueue);
     }
     return this.#disposal;
   }
 
-  async #supervise(entry, authentication, expected) {
+  async #supervise(entry, authentication, expected, upgradeFrom) {
     const { host, controller: { signal } } = entry;
     let tunnel;
     try {
@@ -277,17 +437,21 @@ export class ConnectionManager {
       if (config?.settings?.localforward || config?.settings?.remoteforward || config?.settings?.dynamicforward) {
         throw new ConnectionError('SSH_CONFIGURED_FORWARD', 'Use a dedicated SSH alias without configured LocalForward, RemoteForward or DynamicForward rules.');
       }
+      const binding = this.#bindPassword(host, authentication, config, this.#credentialStore && entry.rememberPassword);
       signal.throwIfAborted();
       entry.stage = 'deploy';
       entry.deployment = validateDeployment(await this.#deploy(host, ({ stage } = {}) => {
         if (!signal.aborted && /^[a-z][a-z0-9_-]{0,39}$/.test(stage ?? '')) entry.stage = stage;
-      }, signal, authentication, expected));
+      }, signal, authentication, expected, upgradeFrom));
       signal.throwIfAborted();
       entry.stage = 'tunnel';
       tunnel = await this.#ssh.openTunnel(host.alias, entry.deployment.remotePort, {
         signal, identityFile: host.identityFile, authentication,
       });
+      signal.throwIfAborted();
+      await this.#persistPassword(entry, authentication, binding);
       authentication.password = undefined;
+      authentication.stored = undefined;
       signal.throwIfAborted();
       const tunnelLifetime = new AbortController();
       const drop = tunnel.closed.then((error) => {
@@ -303,7 +467,8 @@ export class ConnectionManager {
       signal.addEventListener('abort', abortTunnel, { once: true });
       try { throw await drop; } finally { signal.removeEventListener('abort', abortTunnel); }
     } catch (error) {
-      const failure = signal.aborted ? cancelled() : publicError(error);
+      authentication.password = undefined;
+      const failure = signal.aborted ? cancelled() : publicError(await this.#passwordFailure(host, authentication, error));
       if (entry.state === 'connected') entry.readiness = newReadiness();
       entry.readiness.reject(failure);
       entry.state = signal.aborted ? 'disconnected' : 'error';

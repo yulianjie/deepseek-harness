@@ -32,7 +32,7 @@ None; the stores neither assemble nor send model requests.
 <a id="known-limitations-and-deferred-work"></a>
 
 - Persisted stores use JSON in `localStorage` by default. A separate Host runtime supplies its own storage backend so equal Session IDs keep independent state. `createMemoryHostStorage()` retains state for that runtime's lifetime. The package provides no cross-device synchronization.
-- **Web-shell build input** — the static ESM retains third-party imports for Vite; independent consumers supply its development dependencies ([dependency rules](../AGENTS.md#dependency-declaration)).
+- **Web-shell build input** — the static ESM retains third-party imports for Vite; independent consumers supply its development dependencies ([dependency rules](../AGENTS.md#dependency-declaration)). The build defaults to production; `NODE_ENV=development` enables development checks. Wholesale `set()` freezes snapshots only outside production; `update()` retains Immer's automatic freezing.
 
 
 <a id="dev-note"></a>

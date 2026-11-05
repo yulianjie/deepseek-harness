@@ -49,6 +49,9 @@
       "path": "../ui-session"
     },
     {
+      "path": "../file-upload/tsconfig.client.json"
+    },
+    {
       "path": "../../core/agent"
     },
     {
@@ -104,6 +107,9 @@
     },
     {
       "path": "../product-analytics/tsconfig.client.json"
+    },
+    {
+      "path": "../ui-context-menu"
     }
   ],
   "exclude": [

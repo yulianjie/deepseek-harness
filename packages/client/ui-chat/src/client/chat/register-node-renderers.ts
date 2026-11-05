@@ -3,7 +3,9 @@ import type { ObservableSnapshot } from '@deepseek-ai/dsh-client-store'
 import type { PerformanceUsageMode } from '../../chat-settings.ts'
 import type { ChatPresentationPolicy } from '../presentation-policy.ts'
 import { NS } from '../locale.ts'
-import { HostAssistantNodeView } from './AssistantNodeView.tsx'
+import { HostAssistantNodeView, type AssistantNodeInjected } from './AssistantNodeView.tsx'
+import type { HostMediaHooks } from '../contract/slots.ts'
+import { sessionFilePath } from '../file-path.ts'
 import { CommandNodeView, ManualCompactionNodeView } from './CommandNodeView.tsx'
 import {
   CompactionNodeView, ContextMessageNodeView, RetryNodeView, TurnErrorNodeView,
@@ -30,6 +32,8 @@ export function registerChatNodeRenderers(
   presentation: ObservableSnapshot<ChatPresentationPolicy>,
   hostMediaGeneration: ObservableSnapshot<unknown> = { getSnapshot: () => undefined, subscribe: () => () => {} },
 ): void {
+  const pageAccess = ctx.get('hostPageAccess')
+  const resourceUrl = pageAccess?.resourceUrl.bind(pageAccess)
   ctx.effect(() => ctx.slots.registerFactory({
     name: 'conversation.chat.reasoning.content',
     scope: 'root',
@@ -39,10 +43,15 @@ export function registerChatNodeRenderers(
     name: 'conversation.chat.reasoning.body',
     priority: 100,
   }, DefaultReasoningBody))
-  ctx.slots.inject('conversation.chat.node', () => ctx.slots.register(
-    { name: 'conversation.chat.node', key: 'user', locale: NS }, UserMessageNodeView))
-  ctx.slots.inject('conversation.chat.node', () => ctx.slots.register(
-    { name: 'conversation.chat.node', key: 'steering', locale: NS }, UserMessageNodeView))
+  ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({
+    name: 'conversation.chat.node', key: 'user', locale: NS,
+    children: { 'conversation.chat.user.before': { kind: 'chain', scope: 'session' } },
+  }, UserMessageNodeView))
+  // Steering rows share the renderer without owning the message-source seat.
+  ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({
+    name: 'conversation.chat.node', key: 'steering', locale: NS,
+    inject: () => ({ renderSlotChain: () => null }),
+  }, UserMessageNodeView))
   ctx.slots.inject('conversation.chat.node', () => ctx.slots.register(
     { name: 'conversation.chat.node', key: 'context', locale: NS }, ContextMessageNodeView))
   ctx.slots.inject('conversation.chat.node', () => ctx.slots.register(
@@ -57,7 +66,12 @@ export function registerChatNodeRenderers(
       'conversation.chat.reasoning.body': { kind: 'single', scope: 'session' },
       'conversation.chat.message.images': { kind: 'single', scope: 'session' },
     },
-    inject: () => ({ hooks: { presentation, hostMediaGeneration }, resourceUrl: ctx.get('hostPageAccess')?.resourceUrl }),
+    inject: (sessionId): AssistantNodeInjected & { hooks: HostMediaHooks } => ({
+      hooks: { presentation, hostMediaGeneration },
+      resourceUrl,
+      resolveFilePath: sessionFilePath(ctx, sessionId),
+      fileMentions: (owner, getFileTriggerProps) => ctx.get('chatFileMentions')?.forClosing(owner, sessionId, getFileTriggerProps),
+    }),
   }, HostAssistantNodeView))
   ctx.slots.inject('conversation.chat.node', () => ctx.slots.register({
     name: 'conversation.chat.node',

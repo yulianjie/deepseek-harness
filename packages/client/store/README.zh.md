@@ -32,7 +32,7 @@ kind: "package-library"
 <a id="known-limitations-and-deferred-work"></a>
 
 - 状态默认以 JSON 写入 `localStorage`。独立 Host 运行时提供各自的存储后端，使相同 Session ID 对应的状态互相隔离。`createMemoryHostStorage()` 在该运行时的生命周期内保留状态。本包不提供跨设备同步。
-- **Web 壳构建输入**——静态 ESM 为 Vite 保留第三方导入；独立消费方自行提供开发依赖（[依赖规则](../AGENTS.md#dependency-declaration)）。
+- **Web 壳构建输入**——静态 ESM 为 Vite 保留第三方导入；独立消费方自行提供开发依赖（[依赖规则](../AGENTS.md#dependency-declaration)）。构建默认为生产模式；`NODE_ENV=development` 启用开发检查。整份替换的 `set()` 仅在非生产模式冻结快照；`update()` 保留 Immer 的自动冻结。
 
 
 <a id="dev-note"></a>

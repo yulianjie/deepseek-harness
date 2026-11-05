@@ -1,6 +1,7 @@
 import { homedir } from 'node:os'
 import { resolve, join } from 'node:path'
 import { ConnectionManager, OpenSsh } from './host/connection/index.mjs'
+import { createCredentialStore } from './host/connection/credential-store.mjs'
 import { createRemoteDeployment } from './host/remote/index.mjs'
 import { registerSshRoutes } from './host/routes.mjs'
 import { ParallelHostBroker } from './host/parallel/broker.mjs'
@@ -24,6 +25,8 @@ export function apply(ctx, config = {}) {
       authentication: options.authentication,
     }),
   })
-  const manager = new ConnectionManager({ stateDir, ssh, deploy: runtime.deploy, probe: runtime.probe })
+  const manager = new ConnectionManager({ stateDir, ssh, deploy: runtime.deploy, probe: runtime.probe,
+    credentialStore: createCredentialStore(config.loadCredentialBindings),
+  })
   registerSshRoutes(ctx, manager, new ParallelHostBroker(manager))
 }

@@ -15,6 +15,7 @@ const downstreamHeaders = [
 const websocketHeaders = ['sec-websocket-key', 'sec-websocket-version', 'sec-websocket-protocol', 'sec-websocket-extensions']
 const readPaths = new Set([
   '/api/file', '/api/session.export', '/api/changes.summary', '/api/changes.diff', '/api/present.host',
+  '/api/plugin-manager/detail-file', '/api/plugin-market/detail-file',
 ])
 const rawPosts = new Set(['/api/session/uploadFileBinary'])
 const companionMethods = new Map([

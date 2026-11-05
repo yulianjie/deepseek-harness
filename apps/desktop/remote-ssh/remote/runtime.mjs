@@ -8,7 +8,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const script = fileURLToPath(import.meta.url);
 const bundle = dirname(script);
-const [action, root, instance, version, argument, expectedArgument] = process.argv.slice(2);
+const [action, root, instance, version, argument, expectedArgument, upgradeFrom] = process.argv.slice(2);
+const previousVersion = '0.2.1-rc.5';
 const nodeRuntime = action === 'deploy' && {
   nodePath: argument, nodeVersion: process.versions.node,
   pathDigest: createHash('sha256').update(process.env.PATH ?? '').digest('hex'),
@@ -236,12 +237,14 @@ async function install() {
   }
 }
 
-async function endpoint(state, expected) {
+async function endpoint(state, expected, allowUpgrade = false) {
   const runDir = join(instance, 'runs', state.active.run);
   const launch = await readJson(join(runDir, 'run.json'));
   const value = await readJson(join(runDir, 'endpoint.json'));
-  if (!launch || !value || value.hostId !== expected.hostId || value.instanceId !== expected.instanceId
-    || value.bootId !== launch.bootId || value.version !== version || value.pid !== state.active.childPid
+  if (!launch || !value || launch.hostId !== expected.hostId || launch.instanceId !== expected.instanceId
+    || value.hostId !== expected.hostId || value.instanceId !== expected.instanceId
+    || value.bootId !== launch.bootId || value.version !== launch.version || value.pid !== state.active.childPid
+    || (value.version !== version && (!allowUpgrade || value.version !== previousVersion))
     || !Number.isInteger(value.remotePort) || value.remotePort < 1 || value.remotePort > 65535
     || typeof value.token !== 'string' || !/^[\w-]{43}$/.test(value.token)) return;
   const origin = `http://127.0.0.1:${value.remotePort}`;
@@ -254,8 +257,10 @@ async function endpoint(state, expected) {
     if (!response.ok) { await response.body?.cancel(); return; }
     const observed = await response.json();
     if (observed.hostId !== expected.hostId || observed.instanceId !== expected.instanceId
-      || observed.bootId !== value.bootId || observed.version !== version || observed.protocolVersion !== 1) return;
+      || observed.bootId !== value.bootId || observed.version !== value.version || observed.protocolVersion !== 1) return;
   } catch { return; /* The new listener can still be starting. */ }
+  const { hostId, instanceId, bootId, remotePort, token } = value;
+  if (value.version !== version) return { hostId, instanceId, bootId, version: value.version };
   const { nodePath, nodeVersion, pathDigest } = nodeRuntime;
   if (launch.nodeRuntime?.nodePath !== nodePath || launch.nodeRuntime.nodeVersion !== nodeVersion
     || launch.nodeRuntime.pathDigest !== pathDigest) {
@@ -263,21 +268,30 @@ async function endpoint(state, expected) {
     error.code = 'REMOTE_NODE_CHANGED';
     throw error;
   }
-  const { hostId, instanceId, bootId, remotePort, token } = value;
   return { hostId, instanceId, bootId, remotePort, token, version, nodePath, nodeVersion };
 }
 
-async function waitForHost(expected, timeout) {
+async function waitForHost(expected, timeout, allowUpgrade = false) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
     const state = await running();
     if (state.child) {
-      const value = await endpoint(state, expected);
+      const value = await endpoint(state, expected, allowUpgrade);
       if (value) return value;
     }
     if (!state.locked && !state.child) return;
     await delay(350);
   }
+}
+
+function upgradeRequired(upgrade) {
+  return Object.assign(new Error('The authenticated remote Host requires a confirmed restart before upgrading.'), {
+    code: 'REMOTE_UPGRADE_REQUIRED', upgrade,
+  });
+}
+
+function unverifiedHost() {
+  return new Error('The existing remote Host failed identity or health verification. Stop the instance explicitly before restarting it.');
 }
 
 async function launchSupervisor(bin, expected) {
@@ -309,16 +323,31 @@ async function deploy() {
   progress('probe', `Using SSH login Node.js v${nodeRuntime.nodeVersion} (${nodeRuntime.nodePath})`);
   const expected = await identity(expectedArgument === undefined ? undefined : JSON.parse(expectedArgument));
   const current = await running();
+  let cli;
   if (current.locked || current.child) {
-    const value = await waitForHost(expected, 25_000);
-    if (value) {
+    const value = await waitForHost(expected, 25_000, true);
+    if (value?.version === version) {
       progress('reuse', 'Reusing the authenticated remote dsh Host');
       return value;
     }
-    const again = await running();
-    if (again.locked || again.child) throw new Error('The existing remote Host failed identity or health verification. Stop the instance explicitly before restarting it.');
+    if (value) {
+      if (upgradeFrom !== value.bootId) throw upgradeRequired(value);
+      // Leave the existing Host running if the replacement CLI cannot be prepared.
+      cli = await ensureCli();
+      const latest = await running();
+      if (latest.locked || latest.child) {
+        const verified = latest.child && await endpoint(latest, expected, true);
+        if (verified?.version === version) return verified;
+        if (!verified) throw unverifiedHost();
+        if (verified.bootId !== upgradeFrom) throw upgradeRequired(verified);
+        await stop(latest.active.run);
+      }
+    } else {
+      const latest = await running();
+      if (latest.locked || latest.child) throw unverifiedHost();
+    }
   }
-  const { bin, fromPath } = await ensureCli();
+  const { bin, fromPath } = cli ?? await ensureCli();
   progress('start', 'Starting a detached official dsh Web Host');
   let runDir = await launchSupervisor(bin, expected);
   let value = await waitForHost(expected, 90_000);
@@ -370,7 +399,7 @@ async function supervise() {
   if (code !== 0 && code !== null) console.error(`Official dsh Web Host exited with status ${code}`);
 }
 
-async function stop() {
+async function stop(confirmedRun) {
   const state = await running();
   if (!state.locked && !state.child) return { stopped: false };
   progress('stop', 'Stopping the managed remote dsh Host');
@@ -379,6 +408,7 @@ async function stop() {
     const current = await running();
     if (!current.locked && !current.child) return { stopped: true };
     const active = current.active;
+    if (confirmedRun !== undefined && active?.run !== confirmedRun) throw unverifiedHost();
     if (current.supervisor) await signalProcess(active.pid, active.stamp, 'SIGTERM');
     else if (current.child) await signalProcess(active.childPid, active.childStamp, 'SIGTERM');
     // Send TERM only once after identifying the supervisor. Repeated signals
@@ -413,7 +443,7 @@ try {
   else if (action === 'cli') await cli();
   else throw new Error('Unknown remote runtime action');
 } catch (error) {
-  if (action === 'deploy' || action === 'stop') result({ error: error.message, code: error.code });
+  if (action === 'deploy' || action === 'stop') result({ error: error.message, code: error.code, upgrade: error.upgrade });
   else if (action === 'cli') process.stderr.write(`${error.message}\n`, () => process.exit(1));
   else { console.error(error.message); process.exitCode = 1; }
 }

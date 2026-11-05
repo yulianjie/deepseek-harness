@@ -13,6 +13,11 @@ export function createParallelContract() {
     return isUuid(value?.hostId) && isUuid(value?.instanceId)
   }
 
+  function isRuntimeUpgrade(value) {
+    return isHostIdentity(value) && isUuid(value.bootId) && typeof value.version === 'string' &&
+      /^[0-9][A-Za-z0-9.+-]{0,31}$/.test(value.version)
+  }
+
   function hostKey({ hostId, instanceId }) {
     return `ssh:${hostId}:${instanceId}`
   }
@@ -24,11 +29,11 @@ export function createParallelContract() {
 
   return {
     managementPrefix, brokerMuxPath, capabilityHeader, capabilityQuery, sshApiPrefix,
-    isCapability, isHostIdentity, hostKey, isRemoteApi,
+    isCapability, isUuid, isHostIdentity, isRuntimeUpgrade, hostKey, isRemoteApi,
   }
 }
 
 export const {
   managementPrefix, brokerMuxPath, capabilityHeader, capabilityQuery, sshApiPrefix,
-  isCapability, isHostIdentity, hostKey, isRemoteApi,
+  isCapability, isUuid, isHostIdentity, isRuntimeUpgrade, hostKey, isRemoteApi,
 } = createParallelContract()
