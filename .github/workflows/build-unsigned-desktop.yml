@@ -1,0 +1,125 @@
+# Build unsigned Desktop installers on GitHub-hosted runners.
+#
+# The release packaging workflows (macos-package.yml / windows-package.yml) run on
+# self-hosted runners with signing and notarization credentials. This workflow is a
+# credential-free counterpart for a fork: it runs the repository's own unsigned
+# packaging scripts (`package:desktop:*:unsigned`) and uploads the installers as run
+# artifacts. Artifacts are not signed or notarized and are for internal use only.
+name: Build unsigned Desktop installer
+
+on:
+  workflow_dispatch:
+    inputs:
+      mac_arm64:
+        description: '构建 macOS Apple Silicon 未签名 DMG（macos-15）'
+        type: boolean
+        default: true
+        required: true
+      win_x64:
+        description: '构建 Windows x64 未签名安装器（windows-latest）'
+        type: boolean
+        default: false
+        required: true
+      build_version:
+        description: '版本号（留空则使用 apps/desktop/package.json 的产品版本）'
+        type: string
+        default: ''
+        required: false
+
+permissions:
+  contents: read
+
+env:
+  DSH_TELEMETRY_DISABLED: '1'
+
+jobs:
+  mac-arm64:
+    if: inputs.mac_arm64
+    name: macOS arm64 / unsigned DMG
+    runs-on: macos-15
+    timeout-minutes: 300
+    env:
+      DSH_DESKTOP_PACKAGE_CACHE_DIR: ${{ runner.temp }}/dsh-desktop-cache
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+          clean: true
+      - uses: pnpm/action-setup@v5.0.0
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: '24'
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build unsigned DMG
+        env:
+          PACKAGE_BUILD_VERSION: ${{ inputs.build_version }}
+        run: |
+          args=()
+          if [[ -n "$PACKAGE_BUILD_VERSION" ]]; then args+=(--build-version "$PACKAGE_BUILD_VERSION"); fi
+          pnpm run package:desktop:mac:arm64:unsigned "${args[@]}"
+      - name: Keep packaging diagnostics
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: macos-arm64-packaging-logs-${{ github.run_id }}-${{ github.run_attempt }}
+          include-hidden-files: true
+          path: apps/desktop/.desktop-build/packaging-runs/
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Upload installer
+        if: success()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: unsigned-macos-arm64-${{ github.run_id }}
+          path: apps/desktop/.desktop-build/targets/mac-arm64/unsigned-artifacts/*.dmg
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
+
+  win-x64:
+    if: inputs.win_x64
+    name: Windows x64 / unsigned installer
+    runs-on: windows-latest
+    timeout-minutes: 300
+    env:
+      DSH_DESKTOP_PACKAGE_CACHE_DIR: ${{ runner.temp }}/dsh-desktop-cache
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+          clean: true
+      - uses: pnpm/action-setup@v5.0.0
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version: '24'
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Build unsigned installer
+        env:
+          PACKAGE_BUILD_VERSION: ${{ inputs.build_version }}
+        shell: pwsh
+        run: |
+          $arguments = @()
+          if ($env:PACKAGE_BUILD_VERSION) { $arguments += '--build-version'; $arguments += $env:PACKAGE_BUILD_VERSION }
+          pnpm run package:desktop:win:x64:unsigned @arguments
+      - name: Keep packaging diagnostics
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: win-x64-packaging-logs-${{ github.run_id }}-${{ github.run_attempt }}
+          include-hidden-files: true
+          path: apps/desktop/.desktop-build/packaging-runs/
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Upload installer
+        if: success()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: unsigned-win-x64-${{ github.run_id }}
+          path: apps/desktop/.desktop-build/targets/win-x64/unsigned-artifacts/*.exe
+          archive: false
+          if-no-files-found: error
+          retention-days: 30
