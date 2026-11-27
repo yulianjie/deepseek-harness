@@ -25,6 +25,12 @@ on:
         type: string
         default: ''
         required: false
+      mac_runner:
+        description: 'macOS runner 镜像（arm64 容量紧张时可换 macos-14 重试）'
+        type: choice
+        options: [macos-15, macos-14]
+        default: macos-15
+        required: true
 
 permissions:
   contents: read
@@ -36,7 +42,7 @@ jobs:
   mac-arm64:
     if: inputs.mac_arm64
     name: macOS arm64 / unsigned DMG
-    runs-on: macos-15
+    runs-on: ${{ inputs.mac_runner }}
     timeout-minutes: 300
     steps:
       - uses: actions/checkout@v7.0.1
