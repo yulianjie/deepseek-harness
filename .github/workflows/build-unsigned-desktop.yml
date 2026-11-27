@@ -28,7 +28,7 @@ on:
       mac_runner:
         description: 'macOS runner 镜像（arm64 容量紧张时可换 macos-14 重试）'
         type: choice
-        options: [macos-15, macos-14]
+        options: [macos-15, macos-26, macos-14]
         default: macos-15
         required: true
 
