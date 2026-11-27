@@ -38,8 +38,6 @@ jobs:
     name: macOS arm64 / unsigned DMG
     runs-on: macos-15
     timeout-minutes: 300
-    env:
-      DSH_DESKTOP_PACKAGE_CACHE_DIR: ${{ runner.temp }}/dsh-desktop-cache
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -49,6 +47,8 @@ jobs:
       - uses: actions/setup-node@v7.0.0
         with:
           node-version: '24'
+      - name: Configure package caches
+        run: echo "DSH_DESKTOP_PACKAGE_CACHE_DIR=$RUNNER_TEMP/dsh-desktop-cache" >> "$GITHUB_ENV"
       - name: Install locked dependencies
         run: pnpm install --frozen-lockfile
       - name: Build unsigned DMG
@@ -83,8 +83,6 @@ jobs:
     name: Windows x64 / unsigned installer
     runs-on: windows-latest
     timeout-minutes: 300
-    env:
-      DSH_DESKTOP_PACKAGE_CACHE_DIR: ${{ runner.temp }}/dsh-desktop-cache
     steps:
       - uses: actions/checkout@v7.0.1
         with:
@@ -94,6 +92,10 @@ jobs:
       - uses: actions/setup-node@v7.0.0
         with:
           node-version: '24'
+      - name: Configure package caches
+        shell: pwsh
+        run: |
+          "DSH_DESKTOP_PACKAGE_CACHE_DIR=$env:RUNNER_TEMP\dsh-desktop-cache" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
       - name: Install locked dependencies
         run: pnpm install --frozen-lockfile
       - name: Build unsigned installer
