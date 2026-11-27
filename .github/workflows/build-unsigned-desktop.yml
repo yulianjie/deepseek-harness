@@ -96,6 +96,21 @@ jobs:
         shell: pwsh
         run: |
           "DSH_DESKTOP_PACKAGE_CACHE_DIR=$env:RUNNER_TEMP\dsh-desktop-cache" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Write local packaging settings
+        shell: pwsh
+        run: |
+          $settings = @'
+          DSH_DESKTOP_APP_ID=com.deepseek.dsh
+          DSH_DESKTOP_AUTO_UPDATE_ENV=test
+          DOWNLOAD_TEST_ORIGIN=https://download-test.example.invalid
+          DOWNLOAD_TEST_RELEASE_ID=0123456789abcdef0123456789abcdef
+          DSH_DESKTOP_MANDATORY_UPDATE_TEST_ORIGIN=https://policy-test.example.invalid
+          DSH_DESKTOP_MANDATORY_UPDATE_PROD_ORIGIN=https://policy-prod.example.invalid
+          DSH_DESKTOP_MANDATORY_UPDATE_CONFIG={"allowedAuthOrigins":["https://login.example.invalid"]}
+          DSH_DESKTOP_WINDOWS_SIGNATURE_CACHE_CONCURRENCY=4
+          DSH_DESKTOP_WINDOWS_COMPRESSION_LEVEL=3
+          '@
+          $settings | Set-Content -Path apps\desktop\.env.windows -Encoding utf8
       - name: Install locked dependencies
         run: pnpm install --frozen-lockfile
       - name: Build unsigned installer
